@@ -1,0 +1,109 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+yarn.lock
+package-lock.json
+venv/
+crypto_data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Project specific
+/results/
+*.html
+*.csv
+*.json
+*.log
+*.db
+*.sqlite3
+
+# Large files
+*_chart.html
+*_chart.png
+*_chart.jpg
+*_chart.pdf
+*_chart.svg
+*_chart.json
+
+# Testing
+/coverage
+
+# Production
+/build
+/dist
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# IDE - JetBrains
+.idea/
+*.iml
+*.iws
+.idea_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Crypto specific
+*.pem
+*.key
+*.keystore
+*.wallet
+*.seed
+*.mnemonic
+*.private
+*.secret
+
+# Debug
+.debug/
+debug.log
+
+# Temporary files
+*.swp
+*.swo
+*~ 
