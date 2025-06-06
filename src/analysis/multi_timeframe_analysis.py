@@ -17,7 +17,7 @@ def analyze_all_timeframes():
                 available_files.append(interval)
     
     # 按时间周期排序（从小到大）
-    interval_order = ['1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w']
+    interval_order = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']
     available_files = [interval for interval in interval_order if interval in available_files]
     
     print("🚀 多时间周期背离分析")
@@ -203,7 +203,7 @@ def list_all_divergences_by_time():
                 available_files.append(interval)
     
     # 按时间周期排序（从小到大）
-    interval_order = ['1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w']
+    interval_order = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']
     available_files = [interval for interval in interval_order if interval in available_files]
     
     all_divergences = []

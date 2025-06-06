@@ -6,11 +6,456 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.gridspec import GridSpec
 import datetime
+from typing import Dict, List, Any, Optional
+from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
+import warnings
 
 # 添加项目根目录到路径，以便导入其他模块
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.append(project_root)
 
-from src.strategies.divergence_analyzer import DivergenceAnalyzer
+try:
+    from src.strategies.divergence_analyzer import DivergenceAnalyzer
+except ImportError:
+    # 如果直接运行当前文件，尝试相对导入
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from divergence_analyzer import DivergenceAnalyzer
+
+
+class BaseIndicator(ABC):
+    """所有指标的基类"""
+    
+    def __init__(self, name: str, category: str, params: Dict[str, Any] = None):
+        self.name = name
+        self.category = category
+        self.params = params or {}
+        self.cache = {}
+    
+    @abstractmethod
+    def calculate(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """计算指标值"""
+        pass
+    
+    @abstractmethod
+    def get_signal(self, values: Dict[str, Any]) -> str:
+        """获取信号类型: buy/sell/neutral"""
+        pass
+    
+    @abstractmethod
+    def get_strength(self, values: Dict[str, Any]) -> float:
+        """获取信号强度: 0-1"""
+        pass
+    
+    def get_confidence(self, values: Dict[str, Any]) -> float:
+        """获取信号置信度: 0-1"""
+        return 0.5  # 默认实现
+
+
+class RSIIndicator(BaseIndicator):
+    """RSI指标实现"""
+    
+    def __init__(self, period: int = 14):
+        super().__init__("RSI", "momentum", {"period": period})
+    
+    def calculate(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """计算RSI"""
+        closes = df['收盘价'].astype(float)
+        period = self.params['period']
+        
+        delta = closes.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        return {
+            'values': rsi.values,
+            'current': rsi.iloc[-1] if len(rsi) > 0 else 50,
+            'previous': rsi.iloc[-2] if len(rsi) > 1 else 50
+        }
+    
+    def get_signal(self, values: Dict[str, Any]) -> str:
+        """获取RSI信号"""
+        current = values['current']
+        if current > 70:
+            return 'sell'
+        elif current < 30:
+            return 'buy'
+        else:
+            return 'neutral'
+    
+    def get_strength(self, values: Dict[str, Any]) -> float:
+        """获取RSI信号强度"""
+        current = values['current']
+        if current > 80:
+            return min((current - 80) / 20, 1.0)
+        elif current < 20:
+            return min((20 - current) / 20, 1.0)
+        elif current > 70:
+            return (current - 70) / 10 * 0.6
+        elif current < 30:
+            return (30 - current) / 10 * 0.6
+        else:
+            return 0.0
+
+
+class MACDIndicator(BaseIndicator):
+    """MACD指标实现"""
+    
+    def __init__(self, fast: int = 12, slow: int = 26, signal: int = 9):
+        super().__init__("MACD", "momentum", {"fast": fast, "slow": slow, "signal": signal})
+    
+    def calculate(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """计算MACD"""
+        closes = df['收盘价'].astype(float)
+        
+        ema_fast = closes.ewm(span=self.params['fast']).mean()
+        ema_slow = closes.ewm(span=self.params['slow']).mean()
+        macd_line = ema_fast - ema_slow
+        signal_line = macd_line.ewm(span=self.params['signal']).mean()
+        histogram = macd_line - signal_line
+        
+        return {
+            'macd': macd_line.values,
+            'signal': signal_line.values,
+            'histogram': histogram.values,
+            'current_macd': macd_line.iloc[-1] if len(macd_line) > 0 else 0,
+            'current_signal': signal_line.iloc[-1] if len(signal_line) > 0 else 0,
+            'current_histogram': histogram.iloc[-1] if len(histogram) > 0 else 0
+        }
+    
+    def get_signal(self, values: Dict[str, Any]) -> str:
+        """获取MACD信号"""
+        macd = values['current_macd']
+        signal = values['current_signal']
+        histogram = values['current_histogram']
+        
+        if macd > signal and histogram > 0:
+            return 'buy'
+        elif macd < signal and histogram < 0:
+            return 'sell'
+        else:
+            return 'neutral'
+    
+    def get_strength(self, values: Dict[str, Any]) -> float:
+        """获取MACD信号强度"""
+        histogram = abs(values['current_histogram'])
+        # 简单的强度计算，实际应用中可以根据历史数据标准化
+        return min(histogram * 1000, 1.0)
+
+
+class EMAIndicator(BaseIndicator):
+    """EMA指标实现"""
+    
+    def __init__(self, periods: List[int] = [20, 50, 200]):
+        super().__init__("EMA", "trend", {"periods": periods})
+    
+    def calculate(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+        """计算多周期EMA"""
+        closes = df['收盘价'].astype(float)
+        result = {}
+        
+        for period in self.params['periods']:
+            ema = closes.ewm(span=period).mean()
+            result[f'ema_{period}'] = ema.values
+            result[f'current_ema_{period}'] = ema.iloc[-1] if len(ema) > 0 else closes.iloc[-1]
+        
+        return result
+    
+    def get_signal(self, values: Dict[str, Any]) -> str:
+        """获取EMA信号"""
+        # 使用20, 50, 200周期的EMA排列判断趋势
+        ema_20 = values.get('current_ema_20', 0)
+        ema_50 = values.get('current_ema_50', 0)
+        ema_200 = values.get('current_ema_200', 0)
+        
+        if ema_20 > ema_50 > ema_200:
+            return 'buy'
+        elif ema_20 < ema_50 < ema_200:
+            return 'sell'
+        else:
+            return 'neutral'
+    
+    def get_strength(self, values: Dict[str, Any]) -> float:
+        """获取EMA信号强度"""
+        ema_20 = values.get('current_ema_20', 0)
+        ema_50 = values.get('current_ema_50', 0)
+        
+        if ema_20 == 0 or ema_50 == 0:
+            return 0.0
+        
+        # 计算EMA间的距离作为强度指标
+        strength = abs(ema_20 - ema_50) / ema_50
+        return min(strength * 10, 1.0)
+
+
+# 时间框架层级定义
+TIMEFRAME_HIERARCHY = {
+    'primary': ['1h', '4h', '1d'],      # 主要分析框架
+    'secondary': ['30m', '2h'],         # 次要确认框架
+    'reference': ['15m', '1w']          # 参考框架
+}
+
+# 每个时间框架计算的指标
+TIMEFRAME_INDICATORS = {
+    '15m': ['RSI', 'Volume'],           # 只计算快速指标
+    '30m': ['RSI', 'MACD', 'Volume'], 
+    '1h': ['ALL'],                      # 计算所有指标
+    '2h': ['KDJ', 'RSI', 'MACD', 'ADX'],
+    '4h': ['ALL'],                      # 计算所有指标
+    '1d': ['ALL'],                      # 计算所有指标
+    '1w': ['Support_Resistance', 'Trend'] # 只计算长期指标
+}
+
+# 指标分类结构
+INDICATOR_CATEGORIES = {
+    'momentum': ['RSI', 'MACD', 'Stochastic', 'ROC', 'KDJ'],
+    'trend': ['EMA', 'SMA', 'ADX', 'Ichimoku'],
+    'volatility': ['Bollinger', 'ATR', 'Keltner', 'DonchianChannel'],
+    'volume': ['OBV', 'VolumeProfile', 'MFI', 'VWAP'],
+    'custom': ['DynamicKDJ', 'DivergenceDetector']
+}
+
+
+class IndicatorManager:
+    """管理所有指标的计算和缓存"""
+    
+    def __init__(self):
+        self.indicators = {}
+        self.cache = {}
+        self._register_default_indicators()
+    
+    def _register_default_indicators(self):
+        """注册默认指标"""
+        self.register_indicator(RSIIndicator())
+        self.register_indicator(MACDIndicator())
+        self.register_indicator(EMAIndicator())
+    
+    def register_indicator(self, indicator: BaseIndicator):
+        """注册指标"""
+        self.indicators[indicator.name] = indicator
+    
+    def calculate_indicator(self, indicator_name: str, df: pd.DataFrame, timeframe: str) -> Optional[Dict[str, Any]]:
+        """计算单个指标"""
+        if indicator_name not in self.indicators:
+            warnings.warn(f"指标 {indicator_name} 未注册")
+            return None
+        
+        cache_key = f"{indicator_name}_{timeframe}_{len(df)}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        try:
+            indicator = self.indicators[indicator_name]
+            # 传递额外参数给自定义指标
+            kwargs = {'timeframe': timeframe}
+            result = indicator.calculate(df, **kwargs)
+            result['signal'] = indicator.get_signal(result)
+            result['strength'] = indicator.get_strength(result)
+            result['confidence'] = indicator.get_confidence(result)
+            
+            self.cache[cache_key] = result
+            return result
+        except Exception as e:
+            warnings.warn(f"计算指标 {indicator_name} 时出错: {str(e)}")
+            return None
+    
+    def calculate_all(self, df: pd.DataFrame, timeframe: str) -> Dict[str, Any]:
+        """计算所有适用的指标"""
+        results = {}
+        
+        # 确定该时间框架需要计算的指标
+        required_indicators = TIMEFRAME_INDICATORS.get(timeframe, [])
+        if 'ALL' in required_indicators:
+            required_indicators = list(self.indicators.keys())
+        
+        # 并行计算指标
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {}
+            for indicator_name in required_indicators:
+                if indicator_name in self.indicators:
+                    future = executor.submit(self.calculate_indicator, indicator_name, df, timeframe)
+                    futures[indicator_name] = future
+            
+            for indicator_name, future in futures.items():
+                try:
+                    result = future.result(timeout=30)
+                    if result:
+                        results[indicator_name] = result
+                except Exception as e:
+                    warnings.warn(f"计算指标 {indicator_name} 超时或出错: {str(e)}")
+        
+        return results
+    
+    def get_indicator_by_category(self, category: str) -> List[str]:
+        """根据类别获取指标列表"""
+        return INDICATOR_CATEGORIES.get(category, [])
+    
+    def clear_cache(self):
+        """清空缓存"""
+        self.cache.clear()
+
+
+class SignalScorer:
+    """统一的信号评分系统"""
+    
+    def __init__(self):
+        # 各指标类别的基础权重
+        self.category_weights = {
+            'momentum': 0.3,
+            'trend': 0.4,
+            'volatility': 0.15,
+            'volume': 0.1,
+            'custom': 0.05
+        }
+        
+        # 时间框架权重
+        self.timeframe_weights = {
+            '15m': 0.05,
+            '30m': 0.1,
+            '1h': 0.25,
+            '2h': 0.15,
+            '4h': 0.35,
+            '1d': 0.4,
+            '1w': 0.2
+        }
+    
+    def score_single_indicator(self, indicator_result: Dict[str, Any], indicator_name: str) -> float:
+        """为单个指标评分"""
+        if not indicator_result:
+            return 0.0
+        
+        signal = indicator_result.get('signal', 'neutral')
+        strength = indicator_result.get('strength', 0.0)
+        confidence = indicator_result.get('confidence', 0.5)
+        
+        # 基础分数
+        if signal == 'buy':
+            base_score = strength * confidence
+        elif signal == 'sell':
+            base_score = -strength * confidence
+        else:
+            base_score = 0.0
+        
+        return base_score
+    
+    def combine_scores(self, indicator_scores: Dict[str, float], indicator_manager: IndicatorManager) -> float:
+        """合并指标分数"""
+        total_score = 0.0
+        total_weight = 0.0
+        
+        for indicator_name, score in indicator_scores.items():
+            # 获取指标类别
+            category = None
+            for cat, indicators in INDICATOR_CATEGORIES.items():
+                if indicator_name in indicators:
+                    category = cat
+                    break
+            
+            if category:
+                weight = self.category_weights.get(category, 0.1)
+                total_score += score * weight
+                total_weight += weight
+        
+        return total_score / total_weight if total_weight > 0 else 0.0
+    
+    def apply_timeframe_weights(self, timeframe_scores: Dict[str, float]) -> float:
+        """应用时间框架权重"""
+        total_score = 0.0
+        total_weight = 0.0
+        
+        for timeframe, score in timeframe_scores.items():
+            weight = self.timeframe_weights.get(timeframe, 0.1)
+            total_score += score * weight
+            total_weight += weight
+        
+        return total_score / total_weight if total_weight > 0 else 0.0
+    
+    def get_final_decision(self, combined_score: float, threshold: float = 0.3) -> Dict[str, Any]:
+        """获取最终决策"""
+        if combined_score > threshold:
+            return {
+                'direction': 'buy',
+                'strength': abs(combined_score),
+                'confidence': min(abs(combined_score) / threshold, 1.0)
+            }
+        elif combined_score < -threshold:
+            return {
+                'direction': 'sell',
+                'strength': abs(combined_score),
+                'confidence': min(abs(combined_score) / threshold, 1.0)
+            }
+        else:
+            return {
+                'direction': 'neutral',
+                'strength': 0.0,
+                'confidence': 0.5
+            }
+
+
+class MultiTimeframeCoordinator:
+    """协调不同时间框架的指标计算"""
+    
+    def __init__(self, timeframes: List[str] = None):
+        self.timeframes = timeframes or TIMEFRAME_HIERARCHY['primary']
+        self.indicator_manager = IndicatorManager()
+        self.signal_scorer = SignalScorer()
+        self.data_cache = {}
+    
+    def load_data(self, symbol: str, data_dict: Dict[str, pd.DataFrame]) -> bool:
+        """加载多时间框架数据"""
+        try:
+            self.data_cache[symbol] = data_dict
+            return True
+        except Exception as e:
+            warnings.warn(f"加载数据时出错: {str(e)}")
+            return False
+    
+    def calculate_indicators(self, symbol: str) -> Dict[str, Dict[str, Any]]:
+        """计算所有时间框架的指标"""
+        if symbol not in self.data_cache:
+            raise ValueError(f"未找到 {symbol} 的数据")
+        
+        results = {}
+        
+        for timeframe in self.timeframes:
+            if timeframe in self.data_cache[symbol]:
+                df = self.data_cache[symbol][timeframe]
+                indicators = self.indicator_manager.calculate_all(df, timeframe)
+                results[timeframe] = indicators
+        
+        return results
+    
+    def align_signals(self, symbol: str) -> Dict[str, Any]:
+        """对齐不同时间框架的信号"""
+        indicator_results = self.calculate_indicators(symbol)
+        
+        # 计算每个时间框架的综合分数
+        timeframe_scores = {}
+        
+        for timeframe, indicators in indicator_results.items():
+            indicator_scores = {}
+            for indicator_name, result in indicators.items():
+                score = self.signal_scorer.score_single_indicator(result, indicator_name)
+                indicator_scores[indicator_name] = score
+            
+            # 合并该时间框架的所有指标分数
+            combined_score = self.signal_scorer.combine_scores(indicator_scores, self.indicator_manager)
+            timeframe_scores[timeframe] = combined_score
+        
+        # 应用时间框架权重，得到最终分数
+        final_score = self.signal_scorer.apply_timeframe_weights(timeframe_scores)
+        final_decision = self.signal_scorer.get_final_decision(final_score)
+        
+        return {
+            'symbol': symbol,
+            'timeframe_scores': timeframe_scores,
+            'final_score': final_score,
+            'decision': final_decision,
+            'indicator_details': indicator_results
+        }
 
 
 class DynamicKDJ:
@@ -263,15 +708,199 @@ class ADXFilter:
 class TechnicalAnalyzer:
     """
     技术分析器，整合多个技术指标并生成交易信号
+    支持多时间框架分析
     """
-    def __init__(self, config):
+    def __init__(self, config, timeframes: List[str] = None):
         """
         初始化技术分析器
         :param config: 策略配置对象
+        :param timeframes: 要分析的时间框架列表
         """
         self.config = config
+        self.timeframes = timeframes or TIMEFRAME_HIERARCHY['primary']
+        
+        # 初始化组件
+        self.coordinator = MultiTimeframeCoordinator(self.timeframes)
         self.dynamic_kdj = DynamicKDJ(lookback_period=config.technical["atr"]["lookback"])
         self.adx_filter = ADXFilter(period=config.technical["adx"]["period"])
+        
+        # 注册自定义指标
+        self._register_custom_indicators()
+    
+    def _register_custom_indicators(self):
+        """注册自定义指标到协调器"""
+        # 注册动态KDJ为自定义指标
+        class DynamicKDJIndicator(BaseIndicator):
+            def __init__(self, analyzer_instance):
+                super().__init__("DynamicKDJ", "custom")
+                self.analyzer = analyzer_instance
+            
+            def calculate(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+                symbol = kwargs.get('symbol', 'UNKNOWN')
+                config = kwargs.get('config')
+                if config is None:
+                    config = self.analyzer.config
+                result = self.analyzer.calculate_adaptive_kdj(df, symbol, config)
+                if result:
+                    return {
+                        'k': result.get('k', []),
+                        'd': result.get('d', []),
+                        'j': result.get('j', []),
+                        'current_j': result['j'][-1] if result.get('j') else 50,
+                        'top_divergence': result.get('top_divergence', [False])[-1],
+                        'bottom_divergence': result.get('bottom_divergence', [False])[-1]
+                    }
+                return {'current_j': 50, 'top_divergence': False, 'bottom_divergence': False}
+            
+            def get_signal(self, values: Dict[str, Any]) -> str:
+                if values.get('top_divergence'):
+                    return 'sell'
+                elif values.get('bottom_divergence'):
+                    return 'buy'
+                else:
+                    j_current = values.get('current_j', 50)
+                    if j_current > 80:
+                        return 'sell'
+                    elif j_current < 20:
+                        return 'buy'
+                    else:
+                        return 'neutral'
+            
+            def get_strength(self, values: Dict[str, Any]) -> float:
+                if values.get('top_divergence') or values.get('bottom_divergence'):
+                    return 0.9  # 背离信号强度高
+                
+                j_current = values.get('current_j', 50)
+                if j_current > 80:
+                    return min((j_current - 80) / 20, 1.0)
+                elif j_current < 20:
+                    return min((20 - j_current) / 20, 1.0)
+                else:
+                    return 0.0
+        
+        # 注册ADX指标
+        class ADXIndicator(BaseIndicator):
+            def __init__(self, adx_filter_instance):
+                super().__init__("ADX", "trend")
+                self.adx_filter = adx_filter_instance
+            
+            def calculate(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
+                adx_values = self.adx_filter.calculate_adx(df)
+                current_adx = adx_values[-1] if len(adx_values) > 0 else 25
+                market_regime = self.adx_filter.get_market_regime(current_adx)
+                
+                return {
+                    'values': adx_values,
+                    'current': current_adx,
+                    'market_regime': market_regime
+                }
+            
+            def get_signal(self, values: Dict[str, Any]) -> str:
+                regime = values.get('market_regime', 'transition')
+                if regime == 'trending':
+                    return 'neutral'  # ADX本身不提供方向，只确认趋势强度
+                else:
+                    return 'neutral'
+            
+            def get_strength(self, values: Dict[str, Any]) -> float:
+                current_adx = values.get('current', 25)
+                if current_adx > 25:
+                    return min((current_adx - 25) / 50, 1.0)  # 趋势强度
+                else:
+                    return 0.0
+        
+        # 注册到协调器
+        self.coordinator.indicator_manager.register_indicator(DynamicKDJIndicator(self.dynamic_kdj))
+        self.coordinator.indicator_manager.register_indicator(ADXIndicator(self.adx_filter))
+    
+    def analyze_market_multitimeframe(self, data_dict: Dict[str, pd.DataFrame], symbol: str) -> Dict[str, Any]:
+        """
+        多时间框架市场分析
+        :param data_dict: 包含不同时间框架数据的字典 {'1h': df, '4h': df, '1d': df}
+        :param symbol: 交易对符号
+        :return: 多时间框架分析结果
+        """
+        # 加载数据到协调器
+        success = self.coordinator.load_data(symbol, data_dict)
+        if not success:
+            raise ValueError(f"加载 {symbol} 数据失败")
+        
+        # 执行多时间框架分析
+        analysis_result = self.coordinator.align_signals(symbol)
+        
+        # 添加额外的分析信息
+        analysis_result['timestamp'] = datetime.datetime.now()
+        
+        # 获取主要时间框架的价格信息
+        main_timeframe = '4h' if '4h' in data_dict else list(data_dict.keys())[0]
+        if main_timeframe in data_dict:
+            df = data_dict[main_timeframe]
+            analysis_result['close_price'] = df['收盘价'].iloc[-1]
+            analysis_result['main_timeframe'] = main_timeframe
+        
+        # 添加风险评估
+        analysis_result['risk_assessment'] = self._assess_risk(analysis_result)
+        
+        return analysis_result
+    
+    def _assess_risk(self, analysis_result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        评估交易风险
+        :param analysis_result: 分析结果
+        :return: 风险评估结果
+        """
+        decision = analysis_result.get('decision', {})
+        timeframe_scores = analysis_result.get('timeframe_scores', {})
+        
+        # 计算时间框架一致性
+        positive_scores = sum(1 for score in timeframe_scores.values() if score > 0.1)
+        negative_scores = sum(1 for score in timeframe_scores.values() if score < -0.1)
+        total_scores = len(timeframe_scores)
+        
+        if total_scores == 0:
+            consistency = 0.0
+        else:
+            consistency = max(positive_scores, negative_scores) / total_scores
+        
+        # 计算信号强度分布
+        score_variance = np.var(list(timeframe_scores.values())) if timeframe_scores else 0
+        
+        # 风险等级评估
+        if consistency > 0.8 and decision.get('confidence', 0) > 0.7:
+            risk_level = 'low'
+        elif consistency > 0.6 and decision.get('confidence', 0) > 0.5:
+            risk_level = 'medium'
+        else:
+            risk_level = 'high'
+        
+        return {
+            'level': risk_level,
+            'consistency': consistency,
+            'score_variance': score_variance,
+            'recommendation': self._get_risk_recommendation(risk_level, decision)
+        }
+    
+    def _get_risk_recommendation(self, risk_level: str, decision: Dict[str, Any]) -> str:
+        """
+        获取风险建议
+        :param risk_level: 风险等级
+        :param decision: 交易决策
+        :return: 风险建议
+        """
+        direction = decision.get('direction', 'neutral')
+        
+        if risk_level == 'low':
+            if direction != 'neutral':
+                return f"风险较低，可以考虑{direction}操作，建议正常仓位"
+            else:
+                return "风险较低，但信号不明确，建议观望"
+        elif risk_level == 'medium':
+            if direction != 'neutral':
+                return f"风险中等，可以考虑{direction}操作，建议减少仓位"
+            else:
+                return "风险中等，信号不明确，建议观望"
+        else:  # high risk
+            return "风险较高，建议观望或使用小仓位试探"
     
     def analyze_market(self, df, symbol):
         """
@@ -574,9 +1203,13 @@ class TechnicalAnalyzer:
 
 if __name__ == "__main__":
     # 测试代码
-    from src.strategies.config import create_strategy_config
+    try:
+        from src.strategies.config import create_strategy_config
+        from src.strategies.divergence_analyzer import load_bitcoin_data
+    except ImportError:
+        from config import create_strategy_config
+        from divergence_analyzer import load_bitcoin_data
     import pandas as pd
-    from src.strategies.divergence_analyzer import load_bitcoin_data
     
     # 加载数据
     print("加载测试数据...")
@@ -588,56 +1221,133 @@ if __name__ == "__main__":
         config = create_strategy_config("standard")
         analyzer = TechnicalAnalyzer(config)
         
-        # 分析最新的市场状况
-        print("\n执行最新市场分析...")
+        print("=" * 80)
+        print("📊 多时间框架技术分析系统测试")
+        print("=" * 80)
+        
+        # 模拟多时间框架数据（实际应用中需要从交易所获取不同时间框架的数据）
+        print("\n1. 准备多时间框架数据...")
+        
+        # 模拟不同时间框架的数据 (这里用同一份数据模拟，实际应用中应该是不同时间框架的真实数据)
+        data_dict = {
+            '1h': df.copy(),    # 1小时数据
+            '4h': df.copy(),    # 4小时数据  
+            '1d': df.copy()     # 日线数据
+        }
+        
+        # 为了模拟效果，对不同时间框架的数据进行一些处理
+        data_dict['1h'] = data_dict['1h'].tail(200)  # 1小时用最近200个数据点
+        data_dict['4h'] = data_dict['4h'].tail(100)  # 4小时用最近100个数据点
+        data_dict['1d'] = data_dict['1d'].tail(50)   # 日线用最近50个数据点
+        
+        print(f"✓ 1小时数据: {len(data_dict['1h'])} 条记录")
+        print(f"✓ 4小时数据: {len(data_dict['4h'])} 条记录") 
+        print(f"✓ 日线数据: {len(data_dict['1d'])} 条记录")
+        
+        # 执行多时间框架分析
+        print("\n2. 执行多时间框架分析...")
+        try:
+            multitf_result = analyzer.analyze_market_multitimeframe(data_dict, "BTCUSDT")
+            
+            print("\n" + "=" * 60)
+            print("📈 多时间框架分析结果")
+            print("=" * 60)
+            
+            # 显示基本信息
+            print(f"交易对: {multitf_result['symbol']}")
+            print(f"分析时间: {multitf_result['timestamp'].strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"当前价格: {multitf_result.get('close_price', 'N/A')}")
+            print(f"主要时间框架: {multitf_result.get('main_timeframe', 'N/A')}")
+            
+            # 显示各时间框架得分
+            print(f"\n📊 各时间框架综合得分:")
+            timeframe_scores = multitf_result.get('timeframe_scores', {})
+            for tf, score in timeframe_scores.items():
+                direction = "📈 看涨" if score > 0.1 else "📉 看跌" if score < -0.1 else "🔄 中性"
+                print(f"  {tf:>4}: {score:>8.3f} ({direction})")
+            
+            # 显示最终决策
+            print(f"\n🎯 最终决策:")
+            decision = multitf_result.get('decision', {})
+            print(f"  方向: {decision.get('direction', 'neutral').upper()}")
+            print(f"  强度: {decision.get('strength', 0):.3f}")
+            print(f"  置信度: {decision.get('confidence', 0):.3f}")
+            print(f"  综合得分: {multitf_result.get('final_score', 0):.3f}")
+            
+            # 显示风险评估
+            print(f"\n⚠️ 风险评估:")
+            risk = multitf_result.get('risk_assessment', {})
+            print(f"  风险等级: {risk.get('level', 'unknown').upper()}")
+            print(f"  一致性: {risk.get('consistency', 0):.3f}")
+            print(f"  得分方差: {risk.get('score_variance', 0):.3f}")
+            print(f"  建议: {risk.get('recommendation', '无建议')}")
+            
+            # 显示各指标详细结果
+            print(f"\n📋 各时间框架指标详情:")
+            indicator_details = multitf_result.get('indicator_details', {})
+            for tf, indicators in indicator_details.items():
+                print(f"\n  {tf} 时间框架:")
+                for indicator_name, result in indicators.items():
+                    signal = result.get('signal', 'neutral')
+                    strength = result.get('strength', 0)
+                    confidence = result.get('confidence', 0)
+                    print(f"    {indicator_name:>12}: {signal:>8} (强度:{strength:.2f}, 置信:{confidence:.2f})")
+            
+        except Exception as e:
+            print(f"❌ 多时间框架分析出错: {str(e)}")
+            import traceback
+            traceback.print_exc()
+        
+        print("\n" + "=" * 80)
+        print("🔄 单时间框架传统分析对比")
+        print("=" * 80)
+        
+        # 执行传统单时间框架分析作为对比
+        print("\n3. 执行传统单时间框架分析...")
         result = analyzer.analyze_market(df, "BTCUSDT")
         
-        # 打印结果
-        print("\n最新分析结果:")
+        # 打印传统分析结果
+        print("\n📊 传统分析结果:")
         print(f"交易对: {result['symbol']}")
         print(f"收盘价: {result['close_price']}")
         print(f"市场状态: {result['market_regime']}")
         print(f"ADX值: {result['adx']:.2f}")
-        print(f"KDJ参数: {result['kdj_params']}")
         print(f"顶部背离: {'是' if result['top_divergence'] else '否'}")
         print(f"底部背离: {'是' if result['bottom_divergence'] else '否'}")
         print(f"信号类型: {result['signal_type']}")
         print(f"信号强度: {result['signal_strength']:.2f}")
         print(f"建议交易: {'是' if result['should_trade'] else '否'}")
         
-        # 分析历史数据并输出每一天的结果
-        print("\n分析历史数据...")
-        historical_results = analyzer.analyze_historical_data(df, "BTCUSDT")
-        
-        # 显示历史分析结果
-        pd.set_option('display.max_rows', 20)  # 设置显示行数
-        pd.set_option('display.width', 1000)   # 设置显示宽度
-        
-        # 选择要显示的关键列
-        display_columns = ['timestamp', 'close_price', 'market_regime', 'adx', 
-                          'signal_type', 'signal_strength', 'should_trade',
-                          'top_divergence', 'bottom_divergence']
-        
-        # 显示历史分析结果
-        print("\n历史分析结果:")
-        print(historical_results[display_columns].tail(10))
-        
-        # 保存结果到CSV文件
+        # 保存结果
+        print("\n4. 保存分析结果...")
         try:
-            output_file = "btc_technical_analysis_results.csv"
+            # 保存多时间框架分析结果
+            import json
+            with open("btc_multitimeframe_analysis.json", "w", encoding='utf-8') as f:
+                # 处理datetime对象
+                result_copy = multitf_result.copy()
+                result_copy['timestamp'] = result_copy['timestamp'].isoformat()
+                json.dump(result_copy, f, ensure_ascii=False, indent=2)
+            print("✓ 多时间框架分析结果已保存至: btc_multitimeframe_analysis.json")
+            
+            # 保存传统分析结果到CSV
+            historical_results = analyzer.analyze_historical_data(df, "BTCUSDT")
+            output_file = "btc_traditional_analysis_results.csv"
             historical_results.to_csv(output_file, index=False)
-            print(f"\n分析结果已保存到文件: {output_file}")
+            print(f"✓ 传统分析结果已保存至: {output_file}")
+            
         except Exception as e:
-            print(f"\n保存结果到CSV文件时出错: {str(e)}")
+            print(f"❌ 保存结果时出错: {str(e)}")
         
-        # 可视化分析结果
-        try:
-            print("\n生成可视化分析图表...")
-            # 可视化最近60天的数据
-            analyzer.visualize_results(df, historical_results, last_n_days=60, 
-                                      save_path="btc_technical_analysis_chart.png")
-            print("可视化图表已保存至: btc_technical_analysis_chart.png")
-        except Exception as e:
-            print(f"\n生成可视化图表时出错: {str(e)}")
+        print("\n" + "=" * 80)
+        print("✅ 测试完成!")
+        print("=" * 80)
+        print("💡 新系统特点:")
+        print("  • 支持多时间框架协同分析")
+        print("  • 智能权重分配和信号融合")
+        print("  • 全面的风险评估体系")
+        print("  • 并行计算提升性能")
+        print("  • 可扩展的指标体系架构")
+        
     else:
-        print("无法加载测试数据") 
+        print("❌ 无法加载测试数据") 
