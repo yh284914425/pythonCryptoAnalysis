@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime
 import pytz
 import os
-from divergence_analysis import DivergenceAnalyzer, load_bitcoin_data
+from src.analysis.divergence_analysis import DivergenceAnalyzer, load_bitcoin_data
 
 def analyze_divergence_effectiveness(days_ahead=30):
     """

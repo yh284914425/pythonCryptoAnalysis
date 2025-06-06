@@ -54,10 +54,11 @@ class DivergenceAnalyzer:
         """交叉判断：前一根a1<=b1，当前a2>b2"""
         return a1 <= b1 and a2 > b2
     
-    def calculate_kdj_indicators(self, klines_data):
+    def calculate_kdj_indicators(self, klines_data, params=None):
         """
         计算KDJ指标和顶底背离
         :param klines_data: K线数据，格式为list of dict，包含high, low, close等字段
+        :param params: KDJ参数字典，包含k, d, j等参数。如果为None，则使用默认参数
         :return: 包含j, j1, 顶部背离, 底部背离的字典
         """
         if len(klines_data) < 34:
@@ -69,11 +70,29 @@ class DivergenceAnalyzer:
         low = [float(k['最低价']) for k in klines_data]
         close = [float(k['收盘价']) for k in klines_data]
         
+        # 使用默认参数或传入的参数
+        n = 34  # RSV周期
+        m1 = 3  # RSV平滑
+        m2 = 8  # K值周期
+        m3 = 1  # K值权重
+        m4 = 6  # D值周期
+        m5 = 1  # D值权重
+        j_period = 3  # J1周期
+        
+        # 如果传入了参数，则使用传入的参数
+        if params:
+            if "k" in params:
+                m2 = params["k"]
+            if "d" in params:
+                m4 = params["d"]
+            if "j" in params:
+                j_period = params["j"]
+        
         # 计算LLV和HHV
-        llv = self.LLV(low, 34)
-        hhv = self.HHV(high, 34)
-        lowv = self.EMA(llv, 3)
-        highv = self.EMA(hhv, 3)
+        llv = self.LLV(low, n)
+        hhv = self.HHV(high, n)
+        lowv = self.EMA(llv, m1)
+        highv = self.EMA(hhv, m1)
         
         # 计算RSV
         rsv = []
@@ -84,20 +103,20 @@ class DivergenceAnalyzer:
                 rsv_val = ((close[i] - lowv[i]) / (highv[i] - lowv[i])) * 100
                 rsv.append(rsv_val)
         
-        rsv_ema = self.EMA(rsv, 3)
+        rsv_ema = self.EMA(rsv, m1)
         
         # 计算K、D、J值
-        k = self.SMA(rsv_ema, 8, 1)
-        d = self.SMA(k, 6, 1)
+        k = self.SMA(rsv_ema, m2, m3)
+        d = self.SMA(k, m4, m5)
         j = [3 * k[i] - 2 * d[i] for i in range(len(k))]
-        j1 = self.MA(j, 3)
+        j1 = self.MA(j, j_period)
         
         # 初始化背离数组
         top_divergence = [False] * len(klines_data)
         bottom_divergence = [False] * len(klines_data)
         
         # 检测背离
-        for i in range(34, len(klines_data)):
+        for i in range(n, len(klines_data)):
             # J上穿J1
             j_cross_up_j1 = self.CROSS(j[i-1], j1[i-1], j[i], j1[i])
             # J1上穿J
@@ -107,7 +126,7 @@ class DivergenceAnalyzer:
             if j_cross_up_j1:
                 # 寻找上一个J上穿J1的位置
                 last_cross_index = -1
-                for k_idx in range(i - 1, 33, -1):
+                for k_idx in range(i - 1, n - 1, -1):
                     if self.CROSS(j[k_idx-1], j1[k_idx-1], j[k_idx], j1[k_idx]):
                         last_cross_index = k_idx
                         break
@@ -123,7 +142,7 @@ class DivergenceAnalyzer:
             if j1_cross_up_j:
                 # 寻找上一个J1上穿J的位置
                 last_cross_index = -1
-                for k_idx in range(i - 1, 33, -1):
+                for k_idx in range(i - 1, n - 1, -1):
                     if self.CROSS(j1[k_idx-1], j[k_idx-1], j1[k_idx], j[k_idx]):
                         last_cross_index = k_idx
                         break
