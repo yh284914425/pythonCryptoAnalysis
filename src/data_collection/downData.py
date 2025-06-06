@@ -209,7 +209,7 @@ def get_complete_historical_data(symbol='BTCUSDT', interval='1h', data_dir='cryp
 
 if __name__ == "__main__":
     # 定义所有需要获取的时间周期
-    intervals = ['1h', '2h', '4h', '8h', '12h', '1d', '3d', '1w']  # 获取所有周期
+    intervals = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']  # 获取所有周期
     symbol = 'BTCUSDT'
     data_dir = 'crypto_data'
     
