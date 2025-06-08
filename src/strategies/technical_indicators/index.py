@@ -683,18 +683,24 @@ class RSIIndicator(HybridIndicator):
     
     @validate_dataframe(min_rows=14)
     def _calculate_custom(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
-        """自实现RSI算法"""
+        """自实现RSI算法 - 修复：使用Wilder's Smoothing (EMA)"""
         logger.debug(f"开始计算RSI自实现算法，数据量: {len(df)}")
         closes = df['收盘价'].astype(float)
         period = self.params['period']
         
         delta = closes.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        
+        # 修复：使用Wilder's Smoothing (等同于alpha=1/period的EMA)
+        # 这与TA-Lib的RSI算法一致
+        alpha = 1.0 / period
+        gain_ema = gain.ewm(alpha=alpha, adjust=False).mean()
+        loss_ema = loss.ewm(alpha=alpha, adjust=False).mean()
         
         # 安全的除法操作
         with np.errstate(divide='ignore', invalid='ignore'):
-            rs = np.where(loss == 0, np.inf, gain / loss)
+            rs = np.where(loss_ema == 0, np.inf, gain_ema / loss_ema)
             rsi = np.where(np.isinf(rs), 100, 100 - (100 / (1 + rs)))
             rsi = np.nan_to_num(rsi, nan=50)
         
@@ -702,7 +708,7 @@ class RSIIndicator(HybridIndicator):
             'values': rsi,
             'current': rsi[-1] if len(rsi) > 0 else 50,
             'previous': rsi[-2] if len(rsi) > 1 else 50,
-            'algorithm': 'custom'
+            'algorithm': 'custom_fixed'
         }
     
     def get_signal(self, values: Dict[str, Any]) -> str:
@@ -1285,7 +1291,7 @@ class ATRIndicator(HybridIndicator):
         }
     
     def _calculate_custom(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
-        """自实现ATR算法"""
+        """自实现ATR算法 - 修复：使用EMA平滑"""
         highs = df['最高价'].astype(float)
         lows = df['最低价'].astype(float)
         closes = df['收盘价'].astype(float)
@@ -1298,8 +1304,11 @@ class ATRIndicator(HybridIndicator):
         # 真实波幅是三者的最大值
         tr = np.maximum(tr1, np.maximum(tr2, tr3))
         
-        # 计算ATR (使用简单移动平均)
-        atr = tr.rolling(window=self.params['period']).mean()
+        # 修复：使用EMA平滑，与TA-Lib的ATR算法一致
+        # Wilder's Smoothing: alpha = 1/period
+        period = self.params['period']
+        alpha = 1.0 / period
+        atr = tr.ewm(alpha=alpha, adjust=False).mean()
         
         # 修复：计算ATR百分比，处理closes中的零值
         closes_safe = closes.replace(0, np.nan)  # 零价格替换为NaN
@@ -1312,7 +1321,7 @@ class ATRIndicator(HybridIndicator):
             'current': atr.iloc[-1] if len(atr) > 0 else 0,
             'current_percent': atr_percent.iloc[-1] if len(atr_percent) > 0 else 0,
             'current_price': closes.iloc[-1],
-            'algorithm': 'custom'
+            'algorithm': 'custom_fixed'
         }
     
     def get_signal(self, values: Dict[str, Any]) -> str:
@@ -2728,35 +2737,32 @@ class DynamicKDJ:
     
     def calculate_atr(self, df, period=14):
         """
-        计算ATR指标
+        计算ATR指标 - 修复：使用标准EMA平滑
         :param df: DataFrame，包含high, low, close列
         :param period: ATR周期
         :return: ATR值列表
         """
-        high = df['最高价'].astype(float).values
-        low = df['最低价'].astype(float).values
-        close = df['收盘价'].astype(float).values
+        # 使用pandas进行计算，避免手动循环的复杂性
+        highs = df['最高价'].astype(float)
+        lows = df['最低价'].astype(float)
+        closes = df['收盘价'].astype(float)
         
-        # 计算True Range - 修复时序错位
-        tr1 = high - low
-        prev_close = np.concatenate(([np.nan], close[:-1]))
-        tr2 = np.abs(high - prev_close)
-        tr3 = np.abs(low - prev_close)
+        # 计算True Range
+        tr1 = highs - lows
+        tr2 = np.abs(highs - closes.shift(1))
+        tr3 = np.abs(lows - closes.shift(1))
         
-        # 处理第一个值的NaN
-        tr2[0] = 0
-        tr3[0] = 0
-        
-        # 计算最大值
+        # 真实波幅是三者的最大值
         tr = np.maximum(tr1, np.maximum(tr2, tr3))
         
-        # 计算ATR
-        atr = np.zeros_like(tr)
-        atr[0] = tr[0]
-        for i in range(1, len(tr)):
-            atr[i] = (atr[i-1] * (period-1) + tr[i]) / period
+        # 修复：使用标准EMA平滑，与TA-Lib一致
+        alpha = 1.0 / period
+        atr = tr.ewm(alpha=alpha, adjust=False).mean()
         
-        return atr
+        # 填充NaN值
+        atr = atr.fillna(0)
+        
+        return atr.values
     
     def update_atr_percentiles(self, symbol, df):
         """
@@ -2968,106 +2974,61 @@ class ADXFilter:
     
     def calculate_adx(self, df):
         """
-        计算ADX指标
+        计算ADX指标 - 修复：使用标准EMA平滑算法
         :param df: DataFrame，包含high, low, close列
         :return: ADX值列表
         """
-        high = df['最高价'].astype(float).values
-        low = df['最低价'].astype(float).values
-        close = df['收盘价'].astype(float).values
+        # 使用pandas DataFrame进行计算，提高代码可读性和正确性
+        highs = df['最高价'].astype(float)
+        lows = df['最低价'].astype(float)
+        closes = df['收盘价'].astype(float)
         
-        # 计算+DI和-DI - 修复数据对齐问题
-        # 使用pandas的shift方法保持数据对齐
-        df_calc = pd.DataFrame({
-            'high': high,
-            'low': low,
-            'close': close
-        })
+        # 计算方向运动
+        up_move = highs - highs.shift(1)
+        down_move = lows.shift(1) - lows
         
-        prev_high = df_calc['high'].shift(1)
-        prev_low = df_calc['low'].shift(1)
-        up_move = df_calc['high'] - prev_high
-        down_move = prev_low - df_calc['low']
-        
-        # 正确处理第一个值
-        up_move.iloc[0] = 0.0
-        down_move.iloc[0] = 0.0
-        
-        # 计算方向指标
+        # 计算+DM和-DM
         plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
         minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
         
-        # 计算TR - 修复数据对齐问题
-        tr1 = df_calc['high'] - df_calc['low']
-        prev_close = df_calc['close'].shift(1)
-        tr2 = np.abs(df_calc['high'] - prev_close)
-        tr3 = np.abs(df_calc['low'] - prev_close)
-        
-        # 处理第一个值的NaN
-        tr2.iloc[0] = 0.0
-        tr3.iloc[0] = 0.0
+        # 计算True Range
+        tr1 = highs - lows
+        tr2 = np.abs(highs - closes.shift(1))
+        tr3 = np.abs(lows - closes.shift(1))
         tr = np.maximum(tr1, np.maximum(tr2, tr3))
         
-        # 计算平滑值 - 修复数组越界
+        # 修复：使用EMA进行平滑，与TA-Lib算法一致
         period = self.period
+        alpha = 1.0 / period
         
-        # 确保有足够的数据
-        if len(tr) < period:
-            return np.zeros(len(tr))
-            
-        tr_smooth = np.zeros_like(tr)
-        plus_dm_smooth = np.zeros_like(plus_dm)
-        minus_dm_smooth = np.zeros_like(minus_dm)
+        # 将numpy数组转换为pandas Series以便使用ewm
+        plus_dm_series = pd.Series(plus_dm)
+        minus_dm_series = pd.Series(minus_dm)
+        tr_series = pd.Series(tr)
         
-        # 安全的初始值设置
-        if period <= len(tr):
-            tr_smooth[period-1] = np.sum(tr[:period])
-            plus_dm_smooth[period-1] = np.sum(plus_dm[:period])
-            minus_dm_smooth[period-1] = np.sum(minus_dm[:period])
+        # 使用EMA平滑
+        plus_dm_smooth = plus_dm_series.ewm(alpha=alpha, adjust=False).mean()
+        minus_dm_smooth = minus_dm_series.ewm(alpha=alpha, adjust=False).mean()
+        tr_smooth = tr_series.ewm(alpha=alpha, adjust=False).mean()
         
-        # 计算平滑值
-        for i in range(period, len(tr)):
-            tr_smooth[i] = tr_smooth[i-1] - (tr_smooth[i-1] / period) + tr[i]
-            plus_dm_smooth[i] = plus_dm_smooth[i-1] - (plus_dm_smooth[i-1] / period) + plus_dm[i]
-            minus_dm_smooth[i] = minus_dm_smooth[i-1] - (minus_dm_smooth[i-1] / period) + minus_dm[i]
+        # 计算+DI和-DI
+        plus_di = 100 * plus_dm_smooth / tr_smooth.replace(0, np.nan)
+        minus_di = 100 * minus_dm_smooth / tr_smooth.replace(0, np.nan)
         
-        # 修复：安全除法处理DI计算
-        plus_di = np.where(
-            np.abs(tr_smooth) < 1e-10,
-            0.0,
-            100 * plus_dm_smooth / np.maximum(tr_smooth, 1e-10)
-        )
-        minus_di = np.where(
-            np.abs(tr_smooth) < 1e-10,
-            0.0,
-            100 * minus_dm_smooth / np.maximum(tr_smooth, 1e-10)
-        )
+        # 填充NaN值
+        plus_di = plus_di.fillna(0)
+        minus_di = minus_di.fillna(0)
         
-        # 确保结果是安全的
-        plus_di = np.nan_to_num(plus_di, nan=0.0, posinf=0.0, neginf=0.0)
-        minus_di = np.nan_to_num(minus_di, nan=0.0, posinf=0.0, neginf=0.0)
-        
-        # 计算DX，安全处理分母为零的情况
+        # 计算DX
         di_sum = plus_di + minus_di
-        dx = np.where(
-            np.abs(di_sum) < 1e-10,
-            0.0,
-            100 * np.abs(plus_di - minus_di) / np.maximum(di_sum, 1e-10)
-        )
-        dx = np.nan_to_num(dx, nan=0.0, posinf=0.0, neginf=0.0)
+        dx = 100 * np.abs(plus_di - minus_di) / di_sum.replace(0, np.nan)
+        dx = dx.fillna(0)
         
-        # 计算ADX - 修复数组越界
-        adx = np.zeros_like(dx)
+        # 计算ADX (对DX进行EMA平滑)
+        adx = dx.ewm(alpha=alpha, adjust=False).mean()
         
-        # 确保有足够的数据点
-        if len(dx) < 2*period:
-            # 数据不足时返回0值数组
-            return adx
-        
-        adx[2*period-2] = np.mean(dx[period-1:2*period-1])
-        
-        for i in range(2*period-1, len(dx)):
-            adx[i] = (adx[i-1] * (period-1) + dx[i]) / period
+        # 填充NaN值并转换为numpy数组
+        adx = adx.fillna(0).values
         
         return adx
     
