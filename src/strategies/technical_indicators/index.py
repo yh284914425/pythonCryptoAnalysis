@@ -2419,14 +2419,8 @@ class SignalScorer:
                         category = cat
                         break
             
-            # 状态指标单独处理
-            if indicator_name == 'ADX' and indicator_results and indicator_name in indicator_results:
-                regime = indicator_results[indicator_name].get('market_regime', 'transition')
-                regime_adjustments[indicator_name] = {
-                    'regime': regime,
-                    'strength': indicator_results[indicator_name].get('strength', 0)
-                }
-                continue
+            # 移除ADX的特殊处理，让其使用标准评分流程
+            # ADX现在返回标准的buy/sell/neutral信号，无需特殊处理
             
             # 方向性指标正常计算
             if category:
@@ -2436,13 +2430,24 @@ class SignalScorer:
         
         base_score = directional_score / directional_weight if directional_weight > 0 else 0.0
         
-        # 应用市场状态调整
+        # 应用市场状态调整 - 现在从ADX结果中获取市场状态
         regime_multiplier = 1.0
+        if indicator_results and 'ADX' in indicator_results:
+            adx_result = indicator_results['ADX']
+            regime = adx_result.get('market_regime', 'transition')
+            adx_strength = adx_result.get('strength', 0)
+            
+            if regime == 'trending':
+                regime_multiplier *= (1.0 + adx_strength * 0.2)  # 趋势市场增强
+            elif regime == 'sideways':
+                regime_multiplier *= (1.0 - adx_strength * 0.3)  # 震荡市场削弱
+        
+        # 保留旧的regime_adjustments处理（如果有其他状态指标）
         for adj in regime_adjustments.values():
             if adj['regime'] == 'trending':
-                regime_multiplier *= (1.0 + adj['strength'] * 0.2)  # 趋势市场增强
+                regime_multiplier *= (1.0 + adj['strength'] * 0.2)
             elif adj['regime'] == 'sideways':
-                regime_multiplier *= (1.0 - adj['strength'] * 0.3)  # 震荡市场削弱
+                regime_multiplier *= (1.0 - adj['strength'] * 0.3)
         
         adjusted_score = base_score * regime_multiplier
         
@@ -3181,29 +3186,106 @@ class TechnicalAnalyzer:
             
             def calculate(self, df: pd.DataFrame, **kwargs) -> Dict[str, Any]:
                 try:
+                    # 计算完整的ADX数据，包括+DI和-DI
+                    high = df['最高价'].astype(float).values
+                    low = df['最低价'].astype(float).values
+                    close = df['收盘价'].astype(float).values
+                    
+                    # 计算+DI和-DI用于信号生成
+                    df_calc = pd.DataFrame({
+                        'high': high,
+                        'low': low,
+                        'close': close
+                    })
+                    
+                    prev_high = df_calc['high'].shift(1)
+                    prev_low = df_calc['low'].shift(1)
+                    up_move = df_calc['high'] - prev_high
+                    down_move = prev_low - df_calc['low']
+                    
+                    up_move.iloc[0] = 0.0
+                    down_move.iloc[0] = 0.0
+                    
+                    # 计算方向指标
+                    plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0)
+                    minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0)
+                    
+                    # 计算True Range
+                    prev_close = df_calc['close'].shift(1)
+                    tr1 = df_calc['high'] - df_calc['low']
+                    tr2 = np.abs(df_calc['high'] - prev_close)
+                    tr3 = np.abs(df_calc['low'] - prev_close)
+                    tr = np.maximum(tr1, np.maximum(tr2, tr3))
+                    tr.iloc[0] = tr1.iloc[0]
+                    
+                    # 使用EMA平滑
+                    period = self.adx_filter.period
+                    alpha = 1.0 / period
+                    
+                    smoothed_plus_dm = pd.Series(plus_dm).ewm(alpha=alpha, adjust=False).mean()
+                    smoothed_minus_dm = pd.Series(minus_dm).ewm(alpha=alpha, adjust=False).mean()
+                    smoothed_tr = tr.ewm(alpha=alpha, adjust=False).mean()
+                    
+                    # 计算+DI和-DI
+                    plus_di = 100 * (smoothed_plus_dm / smoothed_tr)
+                    minus_di = 100 * (smoothed_minus_dm / smoothed_tr)
+                    
+                    # 处理异常值
+                    plus_di = plus_di.fillna(0)
+                    minus_di = minus_di.fillna(0)
+                    
+                    # 计算ADX
                     adx_values = self.adx_filter.calculate_adx(df)
                     current_adx = adx_values[-1] if len(adx_values) > 0 else 25
                     market_regime = self.adx_filter.get_market_regime(current_adx)
                     
+                    # 获取当前和前一个周期的DI值
+                    current_plus_di = plus_di.iloc[-1] if len(plus_di) > 0 else 0
+                    current_minus_di = minus_di.iloc[-1] if len(minus_di) > 0 else 0
+                    prev_plus_di = plus_di.iloc[-2] if len(plus_di) > 1 else current_plus_di
+                    prev_minus_di = minus_di.iloc[-2] if len(minus_di) > 1 else current_minus_di
+                    
                     return {
-                        'values': np.array(adx_values),  # 统一为numpy array
-                        'current': float(current_adx),   # 确保是float类型
-                        'market_regime': market_regime
+                        'values': np.array(adx_values),
+                        'current': float(current_adx),
+                        'market_regime': market_regime,
+                        'plus_di': float(current_plus_di),
+                        'minus_di': float(current_minus_di),
+                        'prev_plus_di': float(prev_plus_di),
+                        'prev_minus_di': float(prev_minus_di)
                     }
                 except Exception:
                     # 静默处理ADX计算错误
                     return {
-                        'values': np.array([]),
-                        'current': 25.0,
-                        'market_regime': 'transition'
+                        'values': np.array([]), 
+                        'current': 25.0, 
+                        'market_regime': 'transition', 
+                        'plus_di': 0.0, 
+                        'minus_di': 0.0, 
+                        'prev_plus_di': 0.0, 
+                        'prev_minus_di': 0.0
                     }
             
             def get_signal(self, values: Dict[str, Any]) -> str:
-                # 修复：ADX应该返回标准信号，市场状态放在结果中
-                # SignalScorer只识别 buy/sell/neutral，不识别 trending/sideways
-                regime = values.get('market_regime', 'transition')
-                # ADX主要用于过滤信号，不直接提供买卖信号
-                return 'neutral'
+                """
+                基于+DI和-DI的交叉生成标准买卖信号
+                +DI上穿-DI：买入信号
+                -DI上穿+DI：卖出信号
+                """
+                current_plus_di = values.get('plus_di', 0)
+                current_minus_di = values.get('minus_di', 0)
+                prev_plus_di = values.get('prev_plus_di', 0)
+                prev_minus_di = values.get('prev_minus_di', 0)
+                
+                # 检查交叉信号
+                if (current_plus_di > current_minus_di and 
+                    prev_plus_di <= prev_minus_di):
+                    return 'buy'  # +DI上穿-DI
+                elif (current_minus_di > current_plus_di and 
+                      prev_minus_di <= prev_plus_di):
+                    return 'sell'  # -DI上穿+DI
+                else:
+                    return 'neutral'
             
             def get_strength(self, values: Dict[str, Any]) -> float:
                 current_adx = values.get('current', 25)
