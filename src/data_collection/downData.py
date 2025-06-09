@@ -5,6 +5,8 @@ import time
 import os
 import pytz
 
+PRICE_COLUMNS = ['开盘价', '最高价', '最低价', '收盘价', '成交量', '成交额']
+
 def get_binance_klines(symbol='BTCUSDT', interval='1h', limit=1000, end_time=None, start_time=None):
     """
     获取币安K线数据
@@ -42,33 +44,17 @@ def get_binance_klines(symbol='BTCUSDT', interval='1h', limit=1000, end_time=Non
         df['开盘时间'] = pd.to_datetime(df['开盘时间'], unit='ms', utc=True).dt.tz_convert(beijing_tz)
         df['收盘时间'] = pd.to_datetime(df['收盘时间'], unit='ms', utc=True).dt.tz_convert(beijing_tz)
         
-        # 先将价格列转换为数值类型
-        price_columns = ['开盘价', '最高价', '最低价', '收盘价', '成交量', '成交额']
-        for col in price_columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        # 保证价格列为 float
+        for col in PRICE_COLUMNS:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
         
-        # 检测是否为小值币种（价格小于0.01的币种）
-        is_small_value_coin = False
+        # 检测是否为小值币种，仅做提示
         if len(df) > 0:
             avg_price = df['收盘价'].mean()
             if avg_price < 0.01:
-                is_small_value_coin = True
-                print(f"检测到小值币种 {symbol}，平均价格: {avg_price}，将使用更高精度保存")
-                
-                # 对于小值币种，保留更多小数位以避免科学计数法
-                for col in price_columns:
-                    # 根据价格大小动态决定小数位数
-                    if avg_price < 0.00001:
-                        decimal_places = 12
-                    elif avg_price < 0.0001:
-                        decimal_places = 10
-                    elif avg_price < 0.001:
-                        decimal_places = 8
-                    else:
-                        decimal_places = 6
-                        
-                    df[col] = df[col].apply(lambda x: f"{x:.{decimal_places}f}" if pd.notna(x) else x)
-            
+                print(f"检测到小值币种 {symbol}，平均价格: {avg_price:.12f}，将使用更高精度保存")
+        
         return df
         
     except requests.exceptions.RequestException as e:
@@ -98,7 +84,12 @@ def load_existing_data(filepath):
                 df['开盘时间'] = df['开盘时间'].dt.tz_localize(beijing_tz)
             if df['收盘时间'].dt.tz is None:
                 df['收盘时间'] = df['收盘时间'].dt.tz_localize(beijing_tz)
-                
+            
+            # 保证价格列为 float
+            for col in PRICE_COLUMNS:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+            
             print(f"加载现有数据文件: {filepath}")
             print(f"现有数据条数: {len(df)}")
             if len(df) > 0:
@@ -216,32 +207,34 @@ def get_complete_historical_data(symbol='BTCUSDT', interval='1h', data_dir='cryp
         final_df = pd.concat(all_data, ignore_index=True)
         final_df = final_df.drop_duplicates(subset=['开盘时间'])
         final_df = final_df.sort_values('开盘时间').reset_index(drop=True)
+        # 保证价格列为 float
+        for col in PRICE_COLUMNS:
+            if col in final_df.columns:
+                final_df[col] = pd.to_numeric(final_df[col], errors='coerce')
         
-        # 保存到CSV文件时，先转换时间格式为字符串以避免时区问题
+        # 检测是否为小值币种，在这里计算平均价格（此时数据还是数值类型）
+        avg_price = final_df['收盘价'].mean() if len(final_df) > 0 else 0
+        
+        # 保存到CSV文件时，转换时间和价格格式
         save_df = final_df.copy()
         save_df['开盘时间'] = final_df['开盘时间'].dt.strftime('%Y-%m-%d %H:%M:%S')
         save_df['收盘时间'] = final_df['收盘时间'].dt.strftime('%Y-%m-%d %H:%M:%S')
         
-        # 检测是否为小值币种（价格小于0.01的币种）
-        avg_price = final_df['收盘价'].mean() if len(final_df) > 0 else 0
+        # 对于小值币种，使用更高精度保存价格
         if avg_price < 0.01:
-            print(f"检测到小值币种 {symbol}，平均价格: {avg_price}，将使用更高精度保存")
-            
-            # 对于小值币种，确保价格列不会使用科学计数法
-            price_columns = ['开盘价', '最高价', '最低价', '收盘价']
-            
+            print(f"保存小值币种 {symbol}，平均价格: {avg_price:.12f}，使用高精度格式")
+            price_cols_for_save = ['开盘价', '最高价', '最低价', '收盘价']
             # 根据价格大小动态决定小数位数
             if avg_price < 0.00001:
                 decimal_places = 12
             elif avg_price < 0.0001:
-                decimal_places = 10
+                decimal_places = 10  
             elif avg_price < 0.001:
                 decimal_places = 8
             else:
                 decimal_places = 6
-                
-            for col in price_columns:
-                if not save_df[col].dtype == object:  # 如果不是已经转换为字符串
+            for col in price_cols_for_save:
+                if col in save_df.columns:
                     save_df[col] = save_df[col].apply(lambda x: f"{x:.{decimal_places}f}" if pd.notna(x) else x)
         
         save_df.to_csv(filepath, index=False, encoding='utf-8-sig')
