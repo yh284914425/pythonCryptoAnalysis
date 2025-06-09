@@ -41,8 +41,33 @@ def get_binance_klines(symbol='BTCUSDT', interval='1h', limit=1000, end_time=Non
         beijing_tz = pytz.timezone('Asia/Shanghai')
         df['开盘时间'] = pd.to_datetime(df['开盘时间'], unit='ms', utc=True).dt.tz_convert(beijing_tz)
         df['收盘时间'] = pd.to_datetime(df['收盘时间'], unit='ms', utc=True).dt.tz_convert(beijing_tz)
-        for col in ['开盘价', '最高价', '最低价', '收盘价', '成交量', '成交额']:
+        
+        # 先将价格列转换为数值类型
+        price_columns = ['开盘价', '最高价', '最低价', '收盘价', '成交量', '成交额']
+        for col in price_columns:
             df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # 检测是否为小值币种（价格小于0.01的币种）
+        is_small_value_coin = False
+        if len(df) > 0:
+            avg_price = df['收盘价'].mean()
+            if avg_price < 0.01:
+                is_small_value_coin = True
+                print(f"检测到小值币种 {symbol}，平均价格: {avg_price}，将使用更高精度保存")
+                
+                # 对于小值币种，保留更多小数位以避免科学计数法
+                for col in price_columns:
+                    # 根据价格大小动态决定小数位数
+                    if avg_price < 0.00001:
+                        decimal_places = 12
+                    elif avg_price < 0.0001:
+                        decimal_places = 10
+                    elif avg_price < 0.001:
+                        decimal_places = 8
+                    else:
+                        decimal_places = 6
+                        
+                    df[col] = df[col].apply(lambda x: f"{x:.{decimal_places}f}" if pd.notna(x) else x)
             
         return df
         
@@ -92,12 +117,16 @@ def get_complete_historical_data(symbol='BTCUSDT', interval='1h', data_dir='cryp
     :param data_dir: 数据存储目录
     :return: DataFrame格式的完整K线数据
     """
-    # 创建数据目录
-    os.makedirs(data_dir, exist_ok=True)
+    # 提取币种名称
+    coin_name = symbol.replace('USDT', '')
+    
+    # 创建币种特定的数据目录
+    coin_data_dir = os.path.join(data_dir, coin_name)
+    os.makedirs(coin_data_dir, exist_ok=True)
     
     # 文件路径
-    filename = f"{symbol}_{interval}.csv"
-    filepath = os.path.join(data_dir, filename)
+    filename = f"{interval}.csv"
+    filepath = os.path.join(coin_data_dir, filename)
     
     # 加载现有数据
     existing_df = load_existing_data(filepath)
@@ -192,6 +221,29 @@ def get_complete_historical_data(symbol='BTCUSDT', interval='1h', data_dir='cryp
         save_df = final_df.copy()
         save_df['开盘时间'] = final_df['开盘时间'].dt.strftime('%Y-%m-%d %H:%M:%S')
         save_df['收盘时间'] = final_df['收盘时间'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        # 检测是否为小值币种（价格小于0.01的币种）
+        avg_price = final_df['收盘价'].mean() if len(final_df) > 0 else 0
+        if avg_price < 0.01:
+            print(f"检测到小值币种 {symbol}，平均价格: {avg_price}，将使用更高精度保存")
+            
+            # 对于小值币种，确保价格列不会使用科学计数法
+            price_columns = ['开盘价', '最高价', '最低价', '收盘价']
+            
+            # 根据价格大小动态决定小数位数
+            if avg_price < 0.00001:
+                decimal_places = 12
+            elif avg_price < 0.0001:
+                decimal_places = 10
+            elif avg_price < 0.001:
+                decimal_places = 8
+            else:
+                decimal_places = 6
+                
+            for col in price_columns:
+                if not save_df[col].dtype == object:  # 如果不是已经转换为字符串
+                    save_df[col] = save_df[col].apply(lambda x: f"{x:.{decimal_places}f}" if pd.notna(x) else x)
+        
         save_df.to_csv(filepath, index=False, encoding='utf-8-sig')
         
         print(f"\n数据已保存到 {filepath}")
@@ -210,26 +262,36 @@ def get_complete_historical_data(symbol='BTCUSDT', interval='1h', data_dir='cryp
 if __name__ == "__main__":
     # 定义所有需要获取的时间周期
     intervals = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']  # 获取所有周期
-    symbol = 'BTCUSDT'
+    symbols = ['BTCUSDT', 'PEPEUSDT', 'ETHUSDT']  # 需要下载的交易对
     data_dir = 'crypto_data'
     
-    print(f"开始获取 {symbol} 的K线数据...")
-    print(f"数据将保存在 {data_dir} 目录中")
-    
-    for interval in intervals:
-        print(f"\n{'='*50}")
-        print(f"开始处理 {interval} 周期数据...")
-        print(f"{'='*50}")
+    for symbol in symbols:
+        print(f"\n{'#'*60}")
+        print(f"开始获取 {symbol} 的K线数据...")
         
-        btc_data = get_complete_historical_data(symbol=symbol, interval=interval, data_dir=data_dir)
+        # 提取币种名称
+        coin_name = symbol.replace('USDT', '')
+        coin_data_dir = os.path.join(data_dir, coin_name)
+        print(f"数据将保存在 {coin_data_dir} 目录中")
+        print(f"{'#'*60}")
         
-        if btc_data is not None:
-            print(f"{interval} 数据处理完成")
-        else:
-            print(f"{interval} 数据处理失败")
+        for interval in intervals:
+            print(f"\n{'='*50}")
+            print(f"开始处理 {symbol} 的 {interval} 周期数据...")
+            print(f"{'='*50}")
+            
+            crypto_data = get_complete_historical_data(symbol=symbol, interval=interval, data_dir=data_dir)
+            
+            if crypto_data is not None:
+                print(f"{symbol} {interval} 数据处理完成")
+            else:
+                print(f"{symbol} {interval} 数据处理失败")
+            
+            # 在处理下一个时间周期之前暂停一下
+            time.sleep(2)
         
-        # 在处理下一个时间周期之前暂停一下
-        time.sleep(2)
+        # 在处理下一个交易对之前暂停一下
+        time.sleep(5)
     
     print(f"\n{'='*50}")
     print("所有数据处理完成！")

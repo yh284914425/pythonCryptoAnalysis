@@ -10,10 +10,12 @@ def analyze_all_timeframes():
     data_dir = 'crypto_data'
     available_files = []
     
-    if os.path.exists(data_dir):
-        for file in os.listdir(data_dir):
-            if file.endswith('.csv') and file.startswith('BTCUSDT_'):
-                interval = file.replace('BTCUSDT_', '').replace('.csv', '')
+    # 检查BTC目录
+    btc_dir = os.path.join(data_dir, 'BTC')
+    if os.path.exists(btc_dir):
+        for file in os.listdir(btc_dir):
+            if file.endswith('.csv'):
+                interval = file.replace('.csv', '')
                 available_files.append(interval)
     
     # 按时间周期排序（从小到大）
@@ -196,10 +198,12 @@ def list_all_divergences_by_time():
     data_dir = 'crypto_data'
     available_files = []
     
-    if os.path.exists(data_dir):
-        for file in os.listdir(data_dir):
-            if file.endswith('.csv') and file.startswith('BTCUSDT_'):
-                interval = file.replace('BTCUSDT_', '').replace('.csv', '')
+    # 检查BTC目录
+    btc_dir = os.path.join(data_dir, 'BTC')
+    if os.path.exists(btc_dir):
+        for file in os.listdir(btc_dir):
+            if file.endswith('.csv'):
+                interval = file.replace('.csv', '')
                 available_files.append(interval)
     
     # 按时间周期排序（从小到大）

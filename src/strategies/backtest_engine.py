@@ -38,8 +38,13 @@ class BacktestEngine:
         :param data_dir: 数据目录
         :return: DataFrame
         """
-        filename = f"{symbol}_{timeframe}.csv"
-        filepath = os.path.join(data_dir, filename)
+        # 提取币种名称
+        coin_name = symbol.replace('USDT', '')
+        
+        # 构建币种特定的数据目录和文件路径
+        coin_data_dir = os.path.join(data_dir, coin_name)
+        filename = f"{timeframe}.csv"
+        filepath = os.path.join(coin_data_dir, filename)
         
         if not os.path.exists(filepath):
             print(f"数据文件不存在: {filepath}")

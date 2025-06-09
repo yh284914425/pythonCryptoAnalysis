@@ -3915,19 +3915,34 @@ def generate_detailed_performance_report(analyzer: 'TechnicalAnalyzer') -> str:
     return "\n".join(report)
 
 
-def load_real_timeframe_data(unlimited: bool = False):
+def load_real_timeframe_data(unlimited: bool = False, symbol: str = 'BTCUSDT'):
     """
     从crypto_data文件夹加载真实的多时间框架数据
     :param unlimited: 是否加载全部数据（不限制条数）
+    :param symbol: 交易对符号，例如 'BTCUSDT'
     :return: 包含不同时间框架数据的字典
     """
     data_dict = {}
     timeframes = ['1h', '4h', '1d']  # 主要分析时间框架
     
+    # 提取币种名称
+    coin_name = symbol.replace('USDT', '')
+    
+    # 构建币种特定的数据目录
+    coin_data_dir = os.path.join('crypto_data', coin_name)
+    
+    if not os.path.exists(coin_data_dir):
+        print(f"数据目录不存在: {coin_data_dir}")
+        return None
+    
     for tf in timeframes:
         try:
-            file_path = f"crypto_data/BTCUSDT_{tf}.csv"
+            file_path = os.path.join(coin_data_dir, f"{tf}.csv")
             print(f"正在加载 {tf} 数据from {file_path}...")
+            
+            if not os.path.exists(file_path):
+                print(f"文件不存在: {file_path}")
+                continue
             
             df = pd.read_csv(file_path)
             
@@ -3969,7 +3984,10 @@ def load_real_timeframe_data(unlimited: bool = False):
             
         except Exception as e:
             print(f"❌ 加载 {tf} 数据失败: {str(e)}")
-            return None
+    
+    if not data_dict:
+        print(f"❌ 未能加载任何数据")
+        return None
     
     return data_dict
 
@@ -4143,6 +4161,7 @@ if __name__ == "__main__":
         from config import create_strategy_config
         from divergence_analyzer import load_bitcoin_data
     import pandas as pd
+    import os
     
     print("=" * 80)
     print("📊 比特币市场决策分析")
@@ -4158,8 +4177,9 @@ if __name__ == "__main__":
     
     # 这里可以设置为True来加载全部数据
     unlimited_mode = False  # 改为True来分析全部数据
+    coin = 'ETHUSDT'
     
-    data_dict = load_real_timeframe_data(unlimited=unlimited_mode)
+    data_dict = load_real_timeframe_data(unlimited=unlimited_mode, symbol=coin)
     
     if data_dict:
         print("✅ 数据加载成功")
@@ -4168,19 +4188,28 @@ if __name__ == "__main__":
         # 生成决策分析表格 - 现在分析更多时间点
         if unlimited_mode:
             # 无限制模式：分析完整历史数据
-            decisions_df = analyze_market_decisions(data_dict, "BTCUSDT", use_full_history=True, frequency="4hourly")
+            decisions_df = analyze_market_decisions(data_dict, coin, use_full_history=True, frequency="4hourly")
         else:
             # 标准模式：只分析最近数据
             lookback_days = 200
-            decisions_df = analyze_market_decisions(data_dict, "BTCUSDT", lookback_days=lookback_days, frequency="4hourly")
+            decisions_df = analyze_market_decisions(data_dict, coin, lookback_days=lookback_days, frequency="4hourly")
         
         # 打印美观的决策表格
         print_decision_table(decisions_df)
         
+        # 创建decisions文件夹（如果不存在）
+        decisions_dir = "decisions"
+        os.makedirs(decisions_dir, exist_ok=True)
+        
+        # 提取币种名称
+        coin_name = coin.replace('USDT', '')
+        
         # 保存决策表格到CSV
         try:
-            decisions_df.to_csv("btc_decisions.csv", index=False, encoding='utf-8-sig')
-            print(f"\n💾 决策分析表已保存至: btc_decisions.csv")
+            # 构建保存路径
+            file_path = os.path.join(decisions_dir, f"{coin_name}_decisions.csv")
+            decisions_df.to_csv(file_path, index=False, encoding='utf-8-sig')
+            print(f"\n💾 决策分析表已保存至: {file_path}")
         except Exception as e:
             print(f"❌ 保存决策表时出错: {str(e)}")
     else:
