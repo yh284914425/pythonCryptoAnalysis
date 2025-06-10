@@ -6,5 +6,4 @@ Analysis Module
 """
 
 from .divergence_analysis import *
-from .advanced_divergence_analysis import *
 from .multi_timeframe_analysis import * 

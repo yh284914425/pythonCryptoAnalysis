@@ -161,10 +161,10 @@ class DivergenceAnalyzer:
             'bottom_divergence': bottom_divergence
         }
 
-def load_bitcoin_data(data_dir='crypto_data', symbol='BTCUSDT', interval='1d'):
+def load_bitcoin_data(data_dir='crypto_data', symbol='BTC', interval='1d'):
     """加载比特币数据"""
-    filename = f"{symbol}_{interval}.csv"
-    filepath = os.path.join(data_dir, filename)
+    filename = f"{interval}.csv"
+    filepath = os.path.join(data_dir, symbol, filename)
     
     if not os.path.exists(filepath):
         print(f"数据文件不存在: {filepath}")

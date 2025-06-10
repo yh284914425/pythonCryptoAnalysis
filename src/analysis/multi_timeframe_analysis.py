@@ -1,4 +1,4 @@
-from divergence_analysis import DivergenceAnalyzer, load_bitcoin_data
+from .divergence_analysis import DivergenceAnalyzer, load_bitcoin_data
 import pandas as pd
 import os
 from datetime import datetime
@@ -8,10 +8,11 @@ def analyze_all_timeframes():
     
     # 获取所有可用的数据文件
     data_dir = 'crypto_data'
+    symbol = 'BTC'
     available_files = []
     
     # 检查BTC目录
-    btc_dir = os.path.join(data_dir, 'BTC')
+    btc_dir = os.path.join(data_dir, symbol)
     if os.path.exists(btc_dir):
         for file in os.listdir(btc_dir):
             if file.endswith('.csv'):
@@ -35,7 +36,7 @@ def analyze_all_timeframes():
         print("-" * 50)
         
         # 加载特定周期的数据
-        klines_data = load_bitcoin_data(data_dir='crypto_data', symbol='BTCUSDT', interval=interval)
+        klines_data = load_bitcoin_data(data_dir='crypto_data', symbol='BTC', interval=interval)
         
         if not klines_data:
             print(f"❌ 无法加载 {interval} 数据")
@@ -135,7 +136,7 @@ def analyze_specific_timeframe(interval):
     print("=" * 60)
     
     # 加载数据
-    klines_data = load_bitcoin_data(data_dir='crypto_data', symbol='BTCUSDT', interval=interval)
+    klines_data = load_bitcoin_data(data_dir='crypto_data', symbol='BTC', interval=interval)
     
     if not klines_data:
         print(f"❌ 无法加载 {interval} 数据")
@@ -196,10 +197,11 @@ def list_all_divergences_by_time():
     
     # 获取所有可用的数据文件
     data_dir = 'crypto_data'
+    symbol = 'BTC'
     available_files = []
     
     # 检查BTC目录
-    btc_dir = os.path.join(data_dir, 'BTC')
+    btc_dir = os.path.join(data_dir, symbol)
     if os.path.exists(btc_dir):
         for file in os.listdir(btc_dir):
             if file.endswith('.csv'):
@@ -216,7 +218,7 @@ def list_all_divergences_by_time():
         print(f"📊 正在处理 {interval} 周期数据...")
         
         # 加载特定周期的数据
-        klines_data = load_bitcoin_data(data_dir='crypto_data', symbol='BTCUSDT', interval=interval)
+        klines_data = load_bitcoin_data(data_dir='crypto_data', symbol='BTC', interval=interval)
         
         if not klines_data or len(klines_data) < 34:
             print(f"❌ 跳过 {interval} 数据（不可用或数据量不足）")
