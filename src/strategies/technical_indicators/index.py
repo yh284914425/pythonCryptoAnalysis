@@ -549,14 +549,12 @@ except ImportError:
 
 # 添加项目根目录到路径，以便导入其他模块
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 sys.path.append(project_root)
 
-try:
-    from src.strategies.divergence_analyzer import DivergenceAnalyzer
-except ImportError:
-    # 如果直接运行当前文件，尝试相对导入
-    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from divergence_analyzer import DivergenceAnalyzer
+# 添加上一层目录
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from divergence_analyzer import DivergenceAnalyzer
 
 
 class BaseIndicator(ABC):
@@ -4154,12 +4152,8 @@ def print_decision_table(decisions_df: pd.DataFrame):
 
 
 if __name__ == "__main__":
-    try:
-        from src.strategies.config import create_strategy_config
-        from src.strategies.divergence_analyzer import load_bitcoin_data
-    except ImportError:
-        from config import create_strategy_config
-        from divergence_analyzer import load_bitcoin_data
+    from config import create_strategy_config
+    from divergence_analyzer import load_bitcoin_data
     import pandas as pd
     import os
     
