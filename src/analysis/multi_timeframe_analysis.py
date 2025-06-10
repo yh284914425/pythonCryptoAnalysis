@@ -1,4 +1,4 @@
-from .divergence_analysis import DivergenceAnalyzer, load_bitcoin_data
+from divergence_analysis import DivergenceAnalyzer, load_bitcoin_data
 import pandas as pd
 import os
 from datetime import datetime
