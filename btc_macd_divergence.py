@@ -42,54 +42,43 @@ def calculate_macd(df):
     
     return df
 
-# 检测MACD顶底背离
-def detect_divergence(df, window_size=20):
-    # 添加新列以标记顶部和底部背离
+# 检测MACD顶底背离（以金叉/死叉为主线）
+def detect_divergence(df):
+    # 标记金叉和死叉
+    df['golden_cross'] = (df['macd'].shift(1) < df['signal'].shift(1)) & (df['macd'] > df['signal'])
+    df['death_cross'] = (df['macd'].shift(1) > df['signal'].shift(1)) & (df['macd'] < df['signal'])
+
     df['top_divergence'] = False
     df['bottom_divergence'] = False
-    
-    # 用于存储背离点的索引和数据
-    top_divergence_info = []  # 存储元组 (索引, 前一个背离点索引)
-    bottom_divergence_info = []  # 存储元组 (索引, 前一个背离点索引)
-    
-    # 检测价格和MACD的局部最大/最小值
-    for i in range(window_size, len(df) - window_size):
-        # 提取窗口数据
-        window = df.iloc[i-window_size:i+window_size+1]
-        middle_idx = window_size
-        
-        # 检测价格局部最高点
-        if window['high'].iloc[middle_idx] == window['high'].max():
-            # 向前查找MACD局部最高点
-            prev_window = df.iloc[max(0, i-window_size*2):i+1]
-            if len(prev_window) > 10:  # 确保有足够的数据点
-                # 如果当前MACD低于前一个高点，则可能是顶背离
-                if prev_window['macd'].iloc[-1] < prev_window['macd'].max() and \
-                   prev_window['macd'].idxmax() != prev_window.index[-1]:
-                    df.loc[window.index[middle_idx], 'top_divergence'] = True
-                    
-                    # 查找前一个顶背离点
-                    prev_idx = prev_window['macd'].idxmax()
-                    prev_point = df.index.get_loc(prev_idx)
-                    
-                    top_divergence_info.append((i, prev_point))
-        
-        # 检测价格局部最低点
-        if window['low'].iloc[middle_idx] == window['low'].min():
-            # 向前查找MACD局部最低点
-            prev_window = df.iloc[max(0, i-window_size*2):i+1]
-            if len(prev_window) > 10:  # 确保有足够的数据点
-                # 如果当前MACD高于前一个低点，则可能是底背离
-                if prev_window['macd'].iloc[-1] > prev_window['macd'].min() and \
-                   prev_window['macd'].idxmin() != prev_window.index[-1]:
-                    df.loc[window.index[middle_idx], 'bottom_divergence'] = True
-                    
-                    # 查找前一个底背离点
-                    prev_idx = prev_window['macd'].idxmin()
-                    prev_point = df.index.get_loc(prev_idx)
-                    
-                    bottom_divergence_info.append((i, prev_point))
-    
+    top_divergence_info = []
+    bottom_divergence_info = []
+
+    # 找出所有金叉和死叉的索引
+    golden_cross_idx = df.index[df['golden_cross']].tolist()
+    death_cross_idx = df.index[df['death_cross']].tolist()
+
+    # 检查底背离（金叉）
+    for i in range(1, len(golden_cross_idx)):
+        prev_idx = golden_cross_idx[i-1]
+        curr_idx = golden_cross_idx[i]
+        prev_pos = df.index.get_loc(prev_idx)
+        curr_pos = df.index.get_loc(curr_idx)
+        # 当前价格创新低，MACD未创新低
+        if df['low'].iloc[curr_pos] < df['low'].iloc[prev_pos] and df['macd'].iloc[curr_pos] > df['macd'].iloc[prev_pos]:
+            df.loc[curr_idx, 'bottom_divergence'] = True
+            bottom_divergence_info.append((curr_pos, prev_pos))
+
+    # 检查顶背离（死叉）
+    for i in range(1, len(death_cross_idx)):
+        prev_idx = death_cross_idx[i-1]
+        curr_idx = death_cross_idx[i]
+        prev_pos = df.index.get_loc(prev_idx)
+        curr_pos = df.index.get_loc(curr_idx)
+        # 当前价格创新高，MACD未创新高
+        if df['high'].iloc[curr_pos] > df['high'].iloc[prev_pos] and df['macd'].iloc[curr_pos] < df['macd'].iloc[prev_pos]:
+            df.loc[curr_idx, 'top_divergence'] = True
+            top_divergence_info.append((curr_pos, prev_pos))
+
     return df, top_divergence_info, bottom_divergence_info
 
 # 绘制K线图和MACD指标，标注顶底背离
@@ -248,7 +237,7 @@ if __name__ == "__main__":
     df = calculate_macd(df)
     
     # 检测背离
-    df, top_divergence_info, bottom_divergence_info = detect_divergence(df, window_size)
+    df, top_divergence_info, bottom_divergence_info = detect_divergence(df)
     
     # 绘制图表
     plot_chart_with_divergence(df, top_divergence_info, bottom_divergence_info)
