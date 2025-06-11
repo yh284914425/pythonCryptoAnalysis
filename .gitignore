@@ -104,5 +104,6 @@ debug.log
 
 # Temporary files
 *.swp
+*.tmp
 *.swo
 *~ 

@@ -14,6 +14,7 @@ import time
 import logging
 from contextlib import contextmanager
 from functools import wraps
+from dataProcessor import DataProcessor
 
 # 抑制常见的数学运算警告
 warnings.filterwarnings('ignore', category=RuntimeWarning, message='invalid value encountered in divide')
@@ -144,182 +145,6 @@ class SmartCache:
                 'ttl': self.ttl
             }
 
-# 数据预处理工具
-class DataProcessor:
-    """数据预处理工具 - 统一处理数据类型和格式"""
-    
-    @staticmethod
-    def ensure_numeric(df: pd.DataFrame, required_columns: List[str] = None) -> pd.DataFrame:
-        """确保数值列的类型正确，处理边界情况，避免TA-Lib输入错误"""
-        if required_columns is None:
-            required_columns = ['开盘价', '最高价', '最低价', '收盘价', '成交量']
-        
-        df_processed = df.copy()
-        
-        for col in required_columns:
-            if col in df_processed.columns:
-                # 统一转换为数值类型，错误值转为NaN
-                df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
-                
-                # 检查是否整列都是NaN
-                if df_processed[col].isna().all():
-                    # 使用合理的默认值
-                    if col == '成交量':
-                        df_processed[col] = 0.0
-                    else:
-                        # 价格列使用其他有效列的值作为参考
-                        reference_value = None
-                        for ref_col in required_columns:
-                            if ref_col != col and ref_col in df_processed.columns:
-                                valid_values = df_processed[ref_col].dropna()
-                                if len(valid_values) > 0:
-                                    reference_value = valid_values.iloc[-1]
-                                    break
-                        
-                        # 如果找到参考值，使用；否则使用默认值
-                        df_processed[col] = reference_value if reference_value is not None else 100.0
-                else:
-                    # 正常的填充逻辑
-                    df_processed[col] = df_processed[col].ffill()
-                    
-                    # 如果还有NaN（开头），用后向填充
-                    df_processed[col] = df_processed[col].bfill()
-                    
-                    # 最后的保护：如果仍有NaN，用中位数填充
-                    if df_processed[col].isna().any():
-                        median_val = df_processed[col].median()
-                        if pd.notna(median_val):
-                            df_processed[col] = df_processed[col].fillna(median_val)
-                        else:
-                            # 极端情况，使用默认值
-                            default_val = 0.0 if col == '成交量' else 100.0
-                            df_processed[col] = df_processed[col].fillna(default_val)
-                
-                # 确保最终类型为float64
-                df_processed[col] = df_processed[col].astype(np.float64)
-        
-        return df_processed
-    
-    @staticmethod
-    def validate_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
-        """验证数据质量"""
-        quality_report = {
-            'valid': True,
-            'issues': [],
-            'stats': {}
-        }
-        
-        required_columns = ['开盘价', '最高价', '最低价', '收盘价', '成交量']
-        
-        for col in required_columns:
-            if col not in df.columns:
-                quality_report['valid'] = False
-                quality_report['issues'].append(f"缺少列: {col}")
-                continue
-                
-            # 检查数据类型
-            if not pd.api.types.is_numeric_dtype(df[col]):
-                quality_report['issues'].append(f"{col} 不是数值类型")
-            
-            # 检查负值
-            if (df[col] < 0).any():
-                quality_report['issues'].append(f"{col} 包含负值")
-            
-            # 检查NaN比例
-            nan_ratio = df[col].isnull().sum() / len(df)
-            if nan_ratio > 0.1:
-                quality_report['issues'].append(f"{col} NaN比例过高: {nan_ratio:.1%}")
-            
-            quality_report['stats'][col] = {
-                'nan_count': df[col].isnull().sum(),
-                'nan_ratio': nan_ratio,
-                'min': df[col].min(),
-                'max': df[col].max()
-            }
-        
-        return quality_report
-
-# 环境能力检测器
-class EnvironmentChecker:
-    """检测系统环境和依赖能力"""
-    
-    @staticmethod
-    def check_numba_capability() -> Dict[str, Any]:
-        """检查Numba滚动计算能力"""
-        numba_info = {
-            'available': False,
-            'version': None,
-            'pandas_support': False,
-            'recommendation': ''
-        }
-        
-        try:
-            import numba
-            numba_info['available'] = True
-            numba_info['version'] = numba.__version__
-            
-            # 检查pandas版本
-            pandas_version = pd.__version__
-            major, minor = map(int, pandas_version.split('.')[:2])
-            
-            if (major > 2) or (major == 2 and minor >= 1):
-                numba_info['pandas_support'] = True
-                numba_info['recommendation'] = "✅ Numba滚动计算已启用"
-            else:
-                numba_info['recommendation'] = f"⚠️ Pandas {pandas_version} < 2.1，Numba滚动不可用"
-                
-        except ImportError:
-            numba_info['recommendation'] = "❌ Numba未安装，使用纯Python滚动计算"
-        
-        return numba_info
-    
-    @staticmethod
-    def check_signal_capability() -> Dict[str, Any]:
-        """检查信号处理能力"""
-        signal_info = {
-            'available': False,
-            'platform': None,
-            'recommendation': ''
-        }
-        
-        try:
-            import signal
-            import platform
-            signal_info['platform'] = platform.system()
-            
-            if hasattr(signal, 'SIGALRM'):
-                signal_info['available'] = True
-                signal_info['recommendation'] = "✅ 信号超时控制可用"
-            else:
-                signal_info['recommendation'] = "⚠️ Windows系统，信号超时不可用"
-                
-        except ImportError:
-            signal_info['recommendation'] = "❌ 信号模块不可用"
-        
-        return signal_info
-    
-    @staticmethod
-    def print_environment_report():
-        """打印环境检测报告"""
-        print("\n" + "="*60)
-        print("🔧 环境能力检测报告")
-        print("="*60)
-        
-        # Numba检测
-        numba_info = EnvironmentChecker.check_numba_capability()
-        print(f"📊 Numba滚动计算: {numba_info['recommendation']}")
-        if numba_info['available']:
-            print(f"   版本: {numba_info['version']}")
-        
-        # 信号检测
-        signal_info = EnvironmentChecker.check_signal_capability()
-        print(f"⏰ 信号超时控制: {signal_info['recommendation']}")
-        print(f"   平台: {signal_info['platform']}")
-        
-        # TA-Lib检测
-        print(f"📈 TA-Lib加速: {'✅ 可用' if TALIB_AVAILABLE else '❌ 不可用'}")
-        
-        print("="*60)
 
 # 配置验证器
 class ConfigValidator:
@@ -4000,10 +3825,7 @@ def analyze_market_decisions(data_dict: Dict[str, pd.DataFrame], symbol: str = "
     :param frequency: 分析频率 ("daily"=每天, "twice_daily"=每12小时, "4hourly"=每4小时)
     :return: 决策分析DataFrame
     """
-    try:
-        from src.strategies.config import create_strategy_config
-    except ImportError:
-        from config import create_strategy_config
+    from config import create_strategy_config
     
     config = create_strategy_config("standard")
     analyzer = TechnicalAnalyzer(config, use_talib=True)
@@ -4160,10 +3982,7 @@ if __name__ == "__main__":
     print("=" * 80)
     print("📊 比特币市场决策分析")
     print("=" * 80)
-    
-    # 环境检测
-    EnvironmentChecker.print_environment_report()
-    
+        
     # 加载数据 - 支持无限制模式
     print("🔧 数据加载选项:")
     print("  1. 标准模式 (最近1-2千条数据)")
@@ -4171,7 +3990,7 @@ if __name__ == "__main__":
     
     # 这里可以设置为True来加载全部数据
     unlimited_mode = False  # 改为True来分析全部数据
-    coin = 'ETHUSDT'
+    coin = 'PEPEUSDT'
     
     data_dict = load_real_timeframe_data(unlimited=unlimited_mode, symbol=coin)
     
