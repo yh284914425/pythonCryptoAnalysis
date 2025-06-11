@@ -1,19 +1,8 @@
-# import pandas as pd
- 
-# df = pd.Series([1,2,3,4,5],index=['a','b','c','d','e'])
-
-# print(df["a"])
-# print(df[["a","b"]])
-
-
 import pandas as pd
 
-# 创建一个有name的Series
-s = pd.Series([1, 2, 3, 4, 5], 
-              index=['a', 'b', 'c', 'd', 'e'],
-              name='my_series')
+df = pd.DataFrame({'close': [10, 12, 11, 13, 12, 14, 13]})
 
-print(s)
-print(f"Series的name: {s.name}")
+df['local_high'] = (df['close'] > df['close'].shift(1)) & (df['close'] > df['close'].shift(-1))
+df['local_low'] = (df['close'] < df['close'].shift(1)) & (df['close'] < df['close'].shift(-1))
 
-print(s["my_series"])
+print(df)
