@@ -6,6 +6,10 @@ from matplotlib.patches import Rectangle
 from mplfinance.original_flavor import candlestick_ohlc
 import ta
 import datetime
+import sys
+sys.path.append('src/data_collection')  # 添加数据接口路径
+from downData import get_binance_klines
+import pytz
 
 # 读取CSV数据
 def load_data(file_path, years=1):
@@ -28,6 +32,40 @@ def load_data(file_path, years=1):
     # 设置索引
     df.set_index('open_time', inplace=True)
     
+    return df
+
+# 读取CSV数据
+def load_data_from_api(symbol='BTCUSDT', interval='1d', years=1):
+    """
+    通过币安接口获取K线数据，并转换为与原load_data一致的DataFrame格式。
+    :param symbol: 币安交易对
+    :param interval: K线周期
+    :param years: 只保留最近N年的数据
+    :return: DataFrame
+    """
+    df = get_binance_klines(symbol=symbol, interval=interval, limit=1000)
+    if df is None or len(df) == 0:
+        raise ValueError('接口未获取到数据')
+    # 只保留最近N年
+    if years > 0:
+        cutoff_date = pd.Timestamp.now(tz='Asia/Shanghai') - pd.Timedelta(days=365 * years)
+        df = df[df['开盘时间'] >= cutoff_date]
+    # 重命名为英文列名，适配后续处理
+    df = df.rename(columns={
+        '开盘时间': 'open_time',
+        '开盘价': 'open',
+        '最高价': 'high',
+        '最低价': 'low',
+        '收盘价': 'close',
+        '成交量': 'volume',
+        '收盘时间': 'close_time',
+        '成交额': 'quote_volume',
+        '成交笔数': 'count',
+        '主动买入成交量': 'taker_buy_volume',
+        '主动买入成交额': 'taker_buy_quote_volume',
+        '忽略': 'ignore',
+    })
+    df.set_index('open_time', inplace=True)
     return df
 
 # 计算MACD指标
@@ -152,9 +190,9 @@ def calculate_kdj_indicators_for_df(df, n=34, m1=3, m2=8, m3=1, m4=6, m5=1, j_pe
 # KDJ背离专用标注函数，支持时间戳和数值索引两种格式
 def plot_kdj_divergence_fixed(ax3, ohlc, df, kdj_top_divergence_info, kdj_bottom_divergence_info):
     # KDJ线
-    ax3.plot(ohlc['open_time'], df['kdj_k'], label='K', color='blue', linewidth=1)
-    ax3.plot(ohlc['open_time'], df['kdj_d'], label='D', color='orange', linewidth=1)
-    ax3.plot(ohlc['open_time'], df['kdj_j'], label='J', color='purple', linewidth=1)
+    ax3.plot(ohlc['date_num'], df['kdj_k'], label='K', color='blue', linewidth=1)
+    ax3.plot(ohlc['date_num'], df['kdj_d'], label='D', color='orange', linewidth=1)
+    ax3.plot(ohlc['date_num'], df['kdj_j'], label='J', color='purple', linewidth=1)
     # 标注KDJ顶背离
     if kdj_top_divergence_info is not None:
         for curr_idx, prev_idx in kdj_top_divergence_info:
@@ -162,14 +200,14 @@ def plot_kdj_divergence_fixed(ax3, ohlc, df, kdj_top_divergence_info, kdj_bottom
                 curr_idx = ohlc[ohlc['open_time'] == curr_idx].index[0]
             if isinstance(prev_idx, (np.datetime64, pd.Timestamp)):
                 prev_idx = ohlc[ohlc['open_time'] == prev_idx].index[0]
-            point_date = ohlc['open_time'].iloc[curr_idx]
+            point_date = ohlc['date_num'].iloc[curr_idx]
             j_value = df['kdj_j'].iloc[curr_idx]
             ax3.plot(point_date, j_value, 'rv', markersize=8)
-            prev_date = ohlc['open_time'].iloc[prev_idx]
+            prev_date = ohlc['date_num'].iloc[prev_idx]
             prev_j = df['kdj_j'].iloc[prev_idx]
             ax3.plot([prev_date, point_date], [prev_j, j_value], 'r--', linewidth=1)
             # 日期标注（上方）
-            date_str = point_date.strftime('%Y-%m-%d')
+            date_str = ohlc['open_time'].iloc[curr_idx].strftime('%Y-%m-%d')
             ax3.annotate(date_str, (point_date, j_value), xytext=(0, 8), textcoords='offset points', ha='center', va='bottom', fontsize=8, color='red', rotation=45)
     # 标注KDJ底背离
     if kdj_bottom_divergence_info is not None:
@@ -178,14 +216,14 @@ def plot_kdj_divergence_fixed(ax3, ohlc, df, kdj_top_divergence_info, kdj_bottom
                 curr_idx = ohlc[ohlc['open_time'] == curr_idx].index[0]
             if isinstance(prev_idx, (np.datetime64, pd.Timestamp)):
                 prev_idx = ohlc[ohlc['open_time'] == prev_idx].index[0]
-            point_date = ohlc['open_time'].iloc[curr_idx]
+            point_date = ohlc['date_num'].iloc[curr_idx]
             j_value = df['kdj_j'].iloc[curr_idx]
             ax3.plot(point_date, j_value, 'g^', markersize=8)
-            prev_date = ohlc['open_time'].iloc[prev_idx]
+            prev_date = ohlc['date_num'].iloc[prev_idx]
             prev_j = df['kdj_j'].iloc[prev_idx]
             ax3.plot([prev_date, point_date], [prev_j, j_value], 'g--', linewidth=1)
             # 日期标注（下方）
-            date_str = point_date.strftime('%Y-%m-%d')
+            date_str = ohlc['open_time'].iloc[curr_idx].strftime('%Y-%m-%d')
             ax3.annotate(date_str, (point_date, j_value), xytext=(0, -10), textcoords='offset points', ha='center', va='top', fontsize=8, color='green', rotation=45)
     ax3.set_ylabel('KDJ', fontsize=12)
     ax3.set_xlabel('日期', fontsize=12)
@@ -230,26 +268,26 @@ def plot_chart_with_divergence(df, top_divergence_info, bottom_divergence_info, 
     ax1.set_ylabel('价格', fontsize=12)
     ax1.grid(True)
     # MACD
-    ax2.plot(ohlc['open_time'], df['macd'], label='MACD', color='blue', linewidth=1.5)
-    ax2.plot(ohlc['open_time'], df['signal'], label='Signal', color='red', linewidth=1.5)
+    ax2.plot(ohlc['date_num'], df['macd'], label='MACD', color='blue', linewidth=1.5)
+    ax2.plot(ohlc['date_num'], df['signal'], label='Signal', color='red', linewidth=1.5)
     pos_hist = ohlc.copy()
     pos_hist['hist'] = df['hist'].values
     pos_hist = pos_hist[pos_hist['hist'] > 0]
     neg_hist = ohlc.copy()
     neg_hist['hist'] = df['hist'].values
     neg_hist = neg_hist[neg_hist['hist'] <= 0]
-    ax2.bar(pos_hist['open_time'], pos_hist['hist'], color='red', alpha=0.5, width=1)
-    ax2.bar(neg_hist['open_time'], neg_hist['hist'], color='green', alpha=0.5, width=1)
+    ax2.bar(pos_hist['date_num'], pos_hist['hist'], color='red', alpha=0.5, width=1)
+    ax2.bar(neg_hist['date_num'], neg_hist['hist'], color='green', alpha=0.5, width=1)
     y_min_macd, y_max_macd = ax2.get_ylim()
     y_text_offset_macd = (y_max_macd - y_min_macd) * 0.05
     for idx, _ in top_divergence_info:
-        point_date = ohlc['open_time'].iloc[idx]
+        point_date = ohlc['date_num'].iloc[idx]
         macd_value = df['macd'].iloc[idx]
         ax2.plot(point_date, macd_value, 'rv', markersize=8)
         date_str = ohlc['open_time'].iloc[idx].strftime('%Y-%m-%d')
         ax2.annotate(date_str, (point_date, macd_value + y_text_offset_macd), xytext=(0, 5), textcoords='offset points', ha='center', va='bottom', fontsize=8, color='red', rotation=45)
     for idx, _ in bottom_divergence_info:
-        point_date = ohlc['open_time'].iloc[idx]
+        point_date = ohlc['date_num'].iloc[idx]
         macd_value = df['macd'].iloc[idx]
         ax2.plot(point_date, macd_value, 'g^', markersize=8)
         date_str = ohlc['open_time'].iloc[idx].strftime('%Y-%m-%d')
@@ -260,14 +298,17 @@ def plot_chart_with_divergence(df, top_divergence_info, bottom_divergence_info, 
     ax2.legend(loc='upper left')
     # KDJ
     plot_kdj_divergence_fixed(ax3, ohlc, df, kdj_top_divergence_info, kdj_bottom_divergence_info)
+    # 统一x轴格式
+    ax3.xaxis.set_major_formatter(date_format)
     plt.tight_layout()
     plt.savefig('btc_macd_kdj_divergence.png', dpi=300)
     plt.show()
 
 if __name__ == "__main__":
     window_size = 20
-    file_path = 'crypto_data/BTC/1d.csv'
-    df = load_data(file_path, years=1)
+    # file_path = 'crypto_data/BTC/1d.csv'
+    # df = load_data(file_path, years=1)
+    df = load_data_from_api(symbol='BTCUSDT', interval='1d', years=1)
     df = calculate_macd(df)
     # 用KDJ交叉极值法检测背离
     df, kdj_top_divergence_info, kdj_bottom_divergence_info = calculate_kdj_indicators_for_df(df)
