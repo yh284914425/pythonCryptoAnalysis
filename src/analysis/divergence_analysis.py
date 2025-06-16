@@ -11,7 +11,7 @@ class DivergenceAnalyzer:
     
     def MA(self, data, period):
         """简单移动平均"""
-        return pd.Series(data).rolling(window=period).mean().fillna(0).tolist()
+        return pd.Series(data).rolling(window=period, min_periods=1).mean().fillna(0).tolist()
     
     def EMA(self, data, period):
         """指数移动平均"""
@@ -19,36 +19,22 @@ class DivergenceAnalyzer:
     
     def SMA(self, data, n, m):
         """平滑移动平均 (SMA)"""
-        result = []
-        if len(data) == 0:
-            return result
-        
-        sma = data[0]
-        result.append(sma)
-        
-        for i in range(1, len(data)):
-            sma = (m * data[i] + (n - m) * result[i-1]) / n
+        series = pd.Series(data)
+        # 初始化第一个值
+        result = [series.iloc[0]]
+        # 应用SMA公式: (m * current + (n - m) * previous) / n
+        for i in range(1, len(series)):
+            sma = (m * series.iloc[i] + (n - m) * result[i-1]) / n
             result.append(sma)
-        
         return result
     
     def HHV(self, data, period):
         """最高值"""
-        result = []
-        for i in range(len(data)):
-            start_idx = max(0, i - period + 1)
-            max_val = max(data[start_idx:i+1])
-            result.append(max_val)
-        return result
+        return pd.Series(data).rolling(window=period, min_periods=1).max().tolist()
     
     def LLV(self, data, period):
         """最低值"""
-        result = []
-        for i in range(len(data)):
-            start_idx = max(0, i - period + 1)
-            min_val = min(data[start_idx:i+1])
-            result.append(min_val)
-        return result
+        return pd.Series(data).rolling(window=period, min_periods=1).min().tolist()
     
     def CROSS(self, a1, b1, a2, b2):
         """交叉判断：前一根a1<=b1，当前a2>b2"""
@@ -65,10 +51,12 @@ class DivergenceAnalyzer:
             print("数据量不足，需要至少34根K线")
             return None
         
-        # 提取价格数据
-        high = [float(k['最高价']) for k in klines_data]
-        low = [float(k['最低价']) for k in klines_data]
-        close = [float(k['收盘价']) for k in klines_data]
+        # 提取价格数据并转换为DataFrame
+        df = pd.DataFrame({
+            'high': [float(k['最高价']) for k in klines_data],
+            'low': [float(k['最低价']) for k in klines_data],
+            'close': [float(k['收盘价']) for k in klines_data]
+        })
         
         # 使用默认参数或传入的参数
         n = 34  # RSV周期
@@ -89,27 +77,34 @@ class DivergenceAnalyzer:
                 j_period = params["j"]
         
         # 计算LLV和HHV
-        llv = self.LLV(low, n)
-        hhv = self.HHV(high, n)
-        lowv = self.EMA(llv, m1)
-        highv = self.EMA(hhv, m1)
+        df['llv'] = df['low'].rolling(window=n, min_periods=1).min()
+        df['hhv'] = df['high'].rolling(window=n, min_periods=1).max()
+        df['lowv'] = df['llv'].ewm(span=m1, adjust=False).mean()
+        df['highv'] = df['hhv'].ewm(span=m1, adjust=False).mean()
         
         # 计算RSV
-        rsv = []
-        for i in range(len(klines_data)):
-            if highv[i] == lowv[i]:
-                rsv.append(50)
-            else:
-                rsv_val = ((close[i] - lowv[i]) / (highv[i] - lowv[i])) * 100
-                rsv.append(rsv_val)
+        df['rsv'] = np.where(
+            df['highv'] == df['lowv'],
+            50,
+            100 * (df['close'] - df['lowv']) / (df['highv'] - df['lowv'])
+        )
         
-        rsv_ema = self.EMA(rsv, m1)
+        df['rsv_ema'] = df['rsv'].ewm(span=m1, adjust=False).mean()
         
         # 计算K、D、J值
-        k = self.SMA(rsv_ema, m2, m3)
+        # 由于SMA有特殊计算，仍需使用原方法
+        k = self.SMA(df['rsv_ema'].tolist(), m2, m3)
         d = self.SMA(k, m4, m5)
-        j = [3 * k[i] - 2 * d[i] for i in range(len(k))]
-        j1 = self.MA(j, j_period)
+        
+        # 计算J值和J1
+        df['k'] = k
+        df['d'] = d
+        df['j'] = 3 * df['k'] - 2 * df['d']
+        df['j1'] = df['j'].rolling(window=j_period, min_periods=1).mean()
+        
+        # 转换为列表方便后续处理
+        j = df['j'].tolist()
+        j1 = df['j1'].tolist()
         
         # 初始化背离数组
         top_divergence = [False] * len(klines_data)
@@ -133,7 +128,7 @@ class DivergenceAnalyzer:
                 
                 if last_cross_index != -1:
                     # 判断底部背离条件
-                    if (close[last_cross_index] > close[i] and 
+                    if (df['close'].iloc[last_cross_index] > df['close'].iloc[i] and 
                         j[i] > j[last_cross_index] and 
                         j[i] < 20):
                         bottom_divergence[i] = True
@@ -149,7 +144,7 @@ class DivergenceAnalyzer:
                 
                 if last_cross_index != -1:
                     # 判断顶部背离条件
-                    if (close[last_cross_index] < close[i] and 
+                    if (df['close'].iloc[last_cross_index] < df['close'].iloc[i] and 
                         j1[last_cross_index] > j1[i] and 
                         j[i] > 90):
                         top_divergence[i] = True
