@@ -4,6 +4,10 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.patches import Rectangle
 from mplfinance.original_flavor import candlestick_ohlc
+# 添加中文字体支持
+import matplotlib
+matplotlib.rcParams['font.sans-serif'] = ['Microsoft YaHei']  # 使用微软雅黑
+matplotlib.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 import ta
 import datetime
 import sys
@@ -308,7 +312,7 @@ if __name__ == "__main__":
     window_size = 20
     # file_path = 'crypto_data/BTC/1d.csv'
     # df = load_data(file_path, years=1)
-    df = load_data_from_api(symbol='BTCUSDT', interval='1d', years=1)
+    df = load_data_from_api(symbol='BTCUSDT', interval='4h', years=1)
     df = calculate_macd(df)
     # 用KDJ交叉极值法检测背离
     df, kdj_top_divergence_info, kdj_bottom_divergence_info = calculate_kdj_indicators_for_df(df)
