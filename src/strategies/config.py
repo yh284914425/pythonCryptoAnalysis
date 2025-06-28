@@ -40,6 +40,17 @@ class StrategyConfig:
                 "meso": "4h",     # 中观层(4小时)
                 "micro": "1h",    # 微观层(1小时)
             },
+            # 交易对配置
+            "trading_pairs": {
+                "default": "BTCUSDT",  # 默认交易对
+                "supported": ["BTCUSDT", "ETHUSDT", "PEPEUSDT"]  # 支持的交易对列表
+            },
+            # 动态ATR计算配置
+            "atr_config": {
+                "period": 14,  # ATR计算周期
+                "enabled": True,  # 是否启用动态ATR计算
+                "fallback_percentage": 0.03  # ATR计算失败时的备用百分比
+            },
             # 信号确认配置
             "signal_confirmation": {
                 "conservative": 4,  # 保守模式需要的确认指标数

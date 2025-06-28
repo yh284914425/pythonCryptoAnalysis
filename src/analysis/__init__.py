@@ -1,9 +1,12 @@
 """
-分析模块
-Analysis Module
+分析引擎模块
 
-包含KDJ背离分析的核心算法和工具
+该模块负责从数据中识别特定的"分析模式"，如背离、金叉等。
+它不关心指标如何计算，只负责分析已计算的指标数据。
 """
 
-from .divergence_analysis import *
-from .multi_timeframe_analysis import * 
+from .peak_trough_finder import PeakTroughFinder
+from .divergence import DivergenceAnalyzer
+from .pattern_detector import PatternDetector
+
+__all__ = ['PeakTroughFinder', 'DivergenceAnalyzer', 'PatternDetector'] 
